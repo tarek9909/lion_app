@@ -9,6 +9,7 @@
     "build:backend": "npm --prefix backend run build",
     "build:dashboard": "npm --prefix dashboard run build",
     "build": "npm --prefix backend run build && npm --prefix dashboard run build",
+    "db:init": "npm --prefix backend run db:init",
     "demo:seed": "npm --prefix backend run demo:seed",
     "demo:reset": "npm --prefix backend run demo:reset",
     "test": "npm --prefix backend run test",

@@ -63,7 +63,7 @@ npm run test:demo-gaps      # DG-001–DG-008 regression suite
 ```
 
 ### 5. Launch Full Platform Locally
-In Terminal 1 (Backend API & WebSocket on `localhost:4000`):
+In Terminal 1 (Backend API & WebSocket on `localhost:4050`):
 ```bash
 npm run dev:backend
 ```

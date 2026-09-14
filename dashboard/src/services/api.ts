@@ -256,7 +256,16 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone, message, mediaType }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+
+    // The backend returns { success: false, error: { message } } for
+    // provider/database failures. Do not pass undefined to the simulator.
+    if (!res.ok || data.success === false || !data.data) {
+      throw new Error(
+        data.error?.message || `Conversation request failed (HTTP ${res.status})`
+      );
+    }
+
     return data.data;
   },
 

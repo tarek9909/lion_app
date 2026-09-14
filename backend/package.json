@@ -7,6 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "db:init": "tsx src/scripts/init-db.ts",
     "demo:seed": "tsx src/scripts/seed-demo.ts",
     "demo:reset": "tsx src/scripts/reset-demo.ts",
     "test": "tsx src/scripts/test-all.ts",

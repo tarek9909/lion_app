@@ -9,6 +9,9 @@ dist/
 .env.local
 .env.*.local
 *.env
+key.md
+*.key
+keys.md
 
 # OS Files
 .DS_Store

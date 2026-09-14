@@ -9,10 +9,12 @@ import { AIContextState, AIProcessResult, ValidatedIntent } from './ai.types.js'
 export interface GeminiMessagePart {
   text?: string;
   functionCall?: {
+    id?: string;
     name: string;
     args: Record<string, any>;
   };
   functionResponse?: {
+    id?: string;
     name: string;
     response: Record<string, any>;
   };
@@ -94,7 +96,7 @@ export class GeminiService {
   private getToolDeclarations() {
     return [
       {
-        function_declarations: [
+        functionDeclarations: [
           {
             name: 'search_catalog',
             description: 'Search active menus, food meals, and supermarket items across open merchants in Saida. Supports keyword search, budget filter, and preferences (cheapest, best_rated, fastest, best_value).',
@@ -884,7 +886,7 @@ CRITICAL RULES:
       rounds++;
 
       const payload = {
-        system_instruction: {
+        systemInstruction: {
           parts: [{ text: systemInstruction }],
         },
         contents,
@@ -901,7 +903,10 @@ CRITICAL RULES:
       try {
         response = await this.fetchFn(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
+          },
           body: JSON.stringify(payload),
         });
       } catch (err: any) {
@@ -927,7 +932,7 @@ CRITICAL RULES:
       const functionCallPart = modelParts.find(p => p.functionCall);
 
       if (functionCallPart && functionCallPart.functionCall) {
-        const { name, args: fnArgs } = functionCallPart.functionCall;
+        const { name, args: fnArgs, id: functionCallId } = functionCallPart.functionCall;
 
         // Push model's turn to conversation contents
         contents.push({
@@ -948,6 +953,7 @@ CRITICAL RULES:
           parts: [
             {
               functionResponse: {
+                ...(functionCallId ? { id: functionCallId } : {}),
                 name,
                 response: toolExecution.result,
               },
