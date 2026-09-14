@@ -1,0 +1,28 @@
+{
+  "name": "lion-delivery",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lion Delivery — Autonomous WhatsApp Operations & Fulfillment Platform",
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:dashboard": "npm --prefix dashboard run dev",
+    "build:backend": "npm --prefix backend run build",
+    "build:dashboard": "npm --prefix dashboard run build",
+    "build": "npm --prefix backend run build && npm --prefix dashboard run build",
+    "demo:seed": "npm --prefix backend run demo:seed",
+    "demo:reset": "npm --prefix backend run demo:reset",
+    "test": "npm --prefix backend run test",
+    "test:all": "npm --prefix backend run test:all",
+    "test:api": "npm --prefix backend run test:api",
+    "test:webhook": "npm --prefix backend run test:webhook",
+    "test:ws": "npm --prefix backend run test:ws",
+    "test:failures": "npm --prefix backend run test:failures",
+    "test:conversations": "npm --prefix backend run test:conversations",
+    "test:rehearsal": "npm --prefix backend run test:rehearsal",
+    "test:config-matrix": "npm --prefix backend run test:config-matrix",
+    "test:gemini": "npm --prefix backend run test:gemini",
+    "test:browser": "npm --prefix backend run test:browser",
+    "test:demo-gaps": "npm --prefix backend run test:demo-gaps",
+    "demo:backup": "npm --prefix backend run demo:backup"
+  }
+}
