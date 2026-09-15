@@ -87,6 +87,15 @@ export const config = {
     stableProvider: env.AI_STABLE_PROVIDER,
     candidateProvider: env.AI_CANDIDATE_PROVIDER,
     canaryPercentage: env.AI_CANARY_PERCENTAGE,
+    // AI_PROVIDER is a legacy single-provider setting. Routing fields only
+    // become authoritative when the operator explicitly supplies one.
+    routingConfigured: Boolean(
+      process.env.AI_ROUTING_MODE ||
+      process.env.AI_STABLE_PROVIDER ||
+      process.env.AI_CANDIDATE_PROVIDER ||
+      process.env.AI_CANARY_PERCENTAGE
+    ),
+    providerConfigured: Boolean(process.env.AI_PROVIDER),
   },
   whatsappWorker: {
     pollMs: env.WHATSAPP_WORKER_POLL_MS,
@@ -97,6 +106,51 @@ export const config = {
     lbpPerUsd: env.LBP_PER_USD,
   },
 };
+
+export interface ResolvedAIRoutingConfig {
+  stableProvider: 'smart_nlu' | 'gemini';
+  candidateProvider: 'smart_nlu' | 'gemini';
+  routingMode: 'STABLE_ONLY' | 'SHADOW' | 'CANARY' | 'CANDIDATE_ONLY';
+  canaryPercentage: number;
+}
+
+/**
+ * Resolve the exact routing configuration used at runtime and startup.
+ * Legacy AI_PROVIDER remains supported, but cannot silently disagree with an
+ * explicitly configured routing graph.
+ */
+export function resolveAIRoutingConfig(ai: any): ResolvedAIRoutingConfig {
+  const provider = ai?.provider as 'smart_nlu' | 'gemini' | undefined;
+  const explicitlyConfigured =
+    ai?.routingConfigured !== undefined
+      ? ai.routingConfigured === true
+      : ['routingMode', 'stableProvider', 'candidateProvider', 'canaryPercentage'].some((key) =>
+          Object.prototype.hasOwnProperty.call(ai || {}, key)
+        );
+
+  if (!explicitlyConfigured) {
+    return {
+      stableProvider: provider || 'smart_nlu',
+      candidateProvider: 'gemini',
+      routingMode: 'STABLE_ONLY',
+      canaryPercentage: 0,
+    };
+  }
+
+  const stableProvider = (ai?.stableProvider || provider || 'smart_nlu') as 'smart_nlu' | 'gemini';
+  if (provider && provider !== stableProvider) {
+    throw new Error(
+      `Startup Error: AI_PROVIDER=${provider} conflicts with AI_STABLE_PROVIDER=${stableProvider}. Set one provider graph explicitly.`
+    );
+  }
+
+  return {
+    stableProvider,
+    candidateProvider: (ai?.candidateProvider || 'gemini') as 'smart_nlu' | 'gemini',
+    routingMode: (ai?.routingMode || 'STABLE_ONLY') as ResolvedAIRoutingConfig['routingMode'],
+    canaryPercentage: Number(ai?.canaryPercentage || 0),
+  };
+}
 
 /**
  * Validate external service credentials at startup (G-053, G-054, G-061, G-062)
@@ -134,10 +188,11 @@ export function validateStartupConfig(overrideConfig?: any): { whatsappValid: bo
     console.log('[Startup Config] Media Mode: FIXTURE (Deterministic demo boundaries active)');
   }
 
-  const aiRoutingMode = targetConfig.ai?.routingMode || (targetConfig.ai?.provider === 'gemini' ? 'CANDIDATE_ONLY' : 'STABLE_ONLY');
-  const stableProvider = targetConfig.ai?.stableProvider || (targetConfig.ai?.provider === 'gemini' ? 'gemini' : 'smart_nlu');
-  const candidateProvider = targetConfig.ai?.candidateProvider || 'gemini';
-  const canaryPct = targetConfig.ai?.canaryPercentage || 0;
+  const resolvedRouting = resolveAIRoutingConfig(targetConfig.ai || {});
+  const aiRoutingMode = resolvedRouting.routingMode;
+  const stableProvider = resolvedRouting.stableProvider;
+  const candidateProvider = resolvedRouting.candidateProvider;
+  const canaryPct = resolvedRouting.canaryPercentage;
 
   const isGeminiKeyValid = (key?: string): boolean =>
     Boolean(

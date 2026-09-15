@@ -9,6 +9,13 @@ import { formatDualCurrency } from '../../shared/money.js';
 import { geminiService } from './gemini.service.js';
 import { shadowCanaryRouter } from './routing/shadow-canary.service.js';
 import { AIContextState, ValidatedIntent, AIProcessResult } from './ai.types.js';
+import { aiToolsExecutor } from './tools/ai-tools.executor.js';
+import {
+  invalidateCheckout,
+  isHistoricalOrQuestionConfirmation,
+  isNegatedConfirmation,
+  isValidOrderConfirmationPhrase,
+} from './checkout-safety.js';
 
 export { AIContextState, ValidatedIntent, AIProcessResult };
 
@@ -17,7 +24,20 @@ export class AIService {
     try {
       const raw = await redis.get(`ai:state:${customerId}`);
       if (raw) {
-        return JSON.parse(raw);
+        const parsed: any = JSON.parse(raw);
+        if (!Number.isInteger(parsed.turnIndex) || parsed.turnIndex < 0) parsed.turnIndex = 0;
+        if (!parsed.stage) parsed.stage = parsed.awaitingConfirmation ? 'AWAITING_CONFIRMATION' : 'IDLE';
+        if (parsed.selectedMerchant && parsed.selectedMerchantId === undefined) {
+          parsed.selectedMerchantId = parsed.selectedMerchant.id;
+          parsed.selectedMerchantBranchId = parsed.selectedMerchant.branchId;
+          parsed.selectedMerchantName = parsed.selectedMerchant.name;
+        }
+        if (parsed.selectedAddress && parsed.selectedAddressId === undefined) {
+          parsed.selectedAddressId = parsed.selectedAddress.id;
+          parsed.selectedAddressLabel = parsed.selectedAddress.label;
+        }
+        if (parsed.checkoutFingerprint === undefined) parsed.checkoutFingerprint = null;
+        return parsed;
       }
     } catch {}
 
@@ -33,6 +53,9 @@ export class AIService {
       selectedAddressLabel: null,
       awaitingConfirmation: false,
       activeOrderId: null,
+      turnIndex: 0,
+      stage: 'IDLE',
+      checkoutFingerprint: null,
     };
   }
 
@@ -42,6 +65,43 @@ export class AIService {
     } catch {}
   }
 
+  private async requestMerchantSwitchIfNeeded(
+    customerId: number,
+    state: AIContextState,
+    cart: any,
+    target: SearchResult,
+    quantity: number,
+    notes?: string,
+    variantName?: string
+  ): Promise<boolean> {
+    if (
+      !cart ||
+      !cart.merchant_branch_id ||
+      !cart.items?.length ||
+      cart.merchant_branch_id === target.merchantBranchId
+    ) {
+      return false;
+    }
+
+    state.pendingMerchantSwitch = {
+      newMerchantId: target.merchantId,
+      newMerchantName: target.merchantName,
+      newBranchId: target.merchantBranchId,
+      proposedAtTurn: state.turnIndex,
+      pendingProduct: {
+        merchantProductId: target.merchantProductId,
+        productNameQuery: target.productName,
+        quantity,
+        notes,
+        variantName,
+      },
+    };
+    state.stage = 'AWAITING_MERCHANT_SWITCH';
+    invalidateCheckout(state);
+    await this.saveState(customerId, state);
+    return true;
+  }
+
   /**
    * Main Conversational Processing Pipeline (G-020, G-021)
    * Routed via ShadowCanaryRouter to support Live, Shadow, Canary, and Rollback
@@ -49,13 +109,15 @@ export class AIService {
   async processCustomerMessage(
     whatsappNumber: string,
     messageText: string,
-    mediaType?: 'text' | 'image' | 'audio' | 'location'
+    mediaType?: 'text' | 'image' | 'audio' | 'location',
+    options?: { conversationId?: number; requestId?: string }
   ): Promise<AIProcessResult> {
     const route = await shadowCanaryRouter.routeCustomerMessage(
       whatsappNumber,
       messageText,
       mediaType,
-      (phone, msg, media) => this.processInternalLocal(phone, msg, media)
+      (phone, msg, media, providerOptions) => this.processInternalLocal(phone, msg, media, providerOptions),
+      options
     );
     return route.result;
   }
@@ -66,14 +128,72 @@ export class AIService {
   async processInternalLocal(
     whatsappNumber: string,
     messageText: string,
-    mediaType?: 'text' | 'image' | 'audio' | 'location'
+    mediaType?: 'text' | 'image' | 'audio' | 'location',
+    _options?: { conversationId?: number; requestId?: string }
   ): Promise<AIProcessResult> {
     const customer = await customerService.findOrCreateByPhone(whatsappNumber);
     const state = await this.getState(customer.id);
+    // This is the authoritative customer-turn boundary for Smart NLU. It is
+    // persisted before any model/tool decision so merchant-switch isolation
+    // cannot depend on test code manually changing a counter.
+    state.turnIndex = (state.turnIndex || 0) + 1;
+    await this.saveState(customer.id, state);
     const cart = await cartService.getOrCreateActiveCart(customer.id);
 
     const text = (messageText || '').trim();
     const lower = text.toLowerCase();
+
+    // A pending merchant switch owns the next confirmation response. It must
+    // be resolved before normal confirmation handling, otherwise "yes" could
+    // place the old cart's order while the switch is still pending.
+    if (state.pendingMerchantSwitch) {
+      const pending = state.pendingMerchantSwitch;
+      if ((pending.proposedAtTurn ?? 0) >= state.turnIndex) {
+        return {
+          intent: 'CLARIFICATION_REQUIRED',
+          confidence: 0.99,
+          replyText: `Please answer on the next message: clear your current cart and switch to **${pending.newMerchantName}**?`,
+        };
+      }
+
+      if (!aiToolsExecutor.isExplicitMerchantSwitchApproval(text, true)) {
+        if (!isHistoricalOrQuestionConfirmation(text)) {
+          state.pendingMerchantSwitch = null;
+          await this.saveState(customer.id, state);
+        }
+        return {
+          intent: 'CLARIFICATION_REQUIRED',
+          confidence: 0.99,
+          replyText: `I kept your current cart. Please explicitly confirm if you want to switch to **${pending.newMerchantName}**.`,
+        };
+      }
+
+      await cartService.clearCart(cart.id);
+      if (pending.pendingProduct?.merchantProductId) {
+        await cartService.addItem(
+          cart.id,
+          pending.pendingProduct.merchantProductId,
+          pending.pendingProduct.quantity || 1,
+          pending.pendingProduct.notes,
+          pending.pendingProduct.variantName
+        );
+      }
+      state.pendingMerchantSwitch = null;
+      state.selectedMerchantId = pending.newMerchantId;
+      state.selectedMerchantBranchId = pending.newBranchId || null;
+      state.selectedMerchantName = pending.newMerchantName;
+      invalidateCheckout(state);
+      state.stage = 'EDITING_CART';
+      await this.saveState(customer.id, state);
+      const switchedCart = await cartService.getOrCreateActiveCart(customer.id);
+      return {
+        intent: 'ADD_TO_CART',
+        confidence: 0.99,
+        actionTaken: 'MERCHANT_SWITCHED',
+        cartSummary: switchedCart,
+        replyText: `Done — I cleared the old cart and added the item from **${pending.newMerchantName}**. Your cart is ready for review.`,
+      };
+    }
 
     // -------------------------------------------------------------
     // 0. HANDLE PENDING CLARIFICATION (G-022, G-029)
@@ -280,6 +400,18 @@ Meanwhile, I can help you search menus, check prices, adjust your cart, or track
       lower.includes('confirm order') ||
       lower.includes('place order')
     ) {
+      if (
+        !isValidOrderConfirmationPhrase(text) ||
+        isNegatedConfirmation(text) ||
+        isHistoricalOrQuestionConfirmation(text)
+      ) {
+        return {
+          intent: 'CLARIFICATION_REQUIRED',
+          confidence: 0.99,
+          replyText: 'I will only place the order after a clear confirmation such as "confirm".',
+        };
+      }
+
       if (cart.items.length === 0) {
         return {
           intent: 'EMPTY_CART',
@@ -288,44 +420,74 @@ Meanwhile, I can help you search menus, check prices, adjust your cart, or track
         };
       }
 
-      // Default to Home if not chosen
-      let addressId = state.selectedAddressId;
-      if (!addressId) {
-        const defaultResolution = await customerService.resolveAddressCandidates(customer.id, 'home');
-        if (defaultResolution.ambiguous) {
-          state.pendingClarification = 'ADDRESS_DISAMBIGUATION';
-          state.pendingClarificationData = { addresses: defaultResolution.candidates };
-          await this.saveState(customer.id, state);
-          return {
-            intent: 'CLARIFICATION_REQUIRED',
-            confidence: 0.99,
-            replyText: `I found multiple **Home** addresses. Which one should I use?\n${defaultResolution.candidates.map((a, i) => `${i + 1}. ${a.area_name || a.landmark || a.formatted_address || 'Saved address'}`).join('\n')}`,
-          };
-        }
-        if (defaultResolution.address) {
-          addressId = defaultResolution.address.id;
-          state.selectedAddressId = defaultResolution.address.id;
-          state.selectedAddressLabel = defaultResolution.address.label;
-        }
+      // Never infer an address or treat a bare affirmative as checkout proof.
+      // The customer must have received the final summary on a prior turn.
+      if (
+        state.stage !== 'AWAITING_CONFIRMATION' ||
+        !state.awaitingConfirmation ||
+        !state.selectedAddressId ||
+        state.pendingClarification ||
+        state.pendingMerchantSwitch ||
+        !state.checkoutFingerprint
+      ) {
+        return {
+          intent: 'CLARIFICATION_REQUIRED',
+          confidence: 0.99,
+          replyText: 'Please select an address and review the final order summary before confirming.',
+        };
       }
 
-      if (!addressId) {
+      const totals = await cartService.recalculateCart(cart.id);
+      const checkoutSummary = {
+        merchantName: cart.merchant_name || null,
+        itemsCount: cart.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+        items: cart.items.map((item) => ({
+          productName: item.product_name,
+          merchantName: cart.merchant_name || '',
+          quantity: Number(item.quantity),
+          unitPriceUsd: Number(item.unit_price),
+          totalPriceUsd: Number(item.line_total),
+          variant: item.variant_name || undefined,
+          notes: item.customer_notes || undefined,
+        })),
+        subtotalUsd: totals.subtotal,
+        deliveryFeeUsd: totals.deliveryFee,
+        totalUsd: totals.total,
+      };
+      const currentFingerprint = aiToolsExecutor.generateCheckoutFingerprint(checkoutSummary, {
+        id: state.selectedAddressId,
+        label: state.selectedAddressLabel || 'Saved address',
+        formatted: state.selectedAddressLabel || 'Saved address',
+      });
+      if (!currentFingerprint || currentFingerprint !== state.checkoutFingerprint) {
+        invalidateCheckout(state);
+        await this.saveState(customer.id, state);
         return {
-          intent: 'ADDRESS_REQUIRED',
-          confidence: 0.90,
-          replyText: 'Please select a delivery address (e.g. *Home* / *3al Bet*) before confirming.',
+          intent: 'CLARIFICATION_REQUIRED',
+          confidence: 0.99,
+          replyText: 'Your cart or checkout details changed. I need to show you a fresh final summary before placing the order.',
+        };
+      }
+
+      if (state.activeOrderId) {
+        return {
+          intent: 'ORDER_CONFIRMED',
+          confidence: 0.99,
+          actionTaken: 'IDEMPOTENT_CONFIRMATION',
+          replyText: `This order was already confirmed (order #${state.activeOrderId}).`,
         };
       }
 
       // Create Order in Database with Idempotency Key (G-032, G-033)
       const order = await orderService.createOrderFromCart(
         customer.id,
-        addressId,
+        state.selectedAddressId,
         null,
         `order_confirm:${customer.id}:${cart.id}`
       );
 
-      state.awaitingConfirmation = false;
+      invalidateCheckout(state);
+      state.stage = 'ORDER_PLACED';
       state.activeOrderId = order.id;
       await this.saveState(customer.id, state);
 
@@ -375,9 +537,31 @@ The restaurant is reviewing your order now. You will receive live status updates
         state.selectedAddressId = address.id;
         state.selectedAddressLabel = address.label;
         state.awaitingConfirmation = true;
-        await this.saveState(customer.id, state);
+        state.stage = 'AWAITING_CONFIRMATION';
 
         const totals = await cartService.recalculateCart(cart.id);
+        const checkoutSummary = {
+          merchantName: cart.merchant_name || null,
+          itemsCount: cart.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+          items: cart.items.map((item) => ({
+            productName: item.product_name,
+            merchantName: cart.merchant_name || '',
+            quantity: Number(item.quantity),
+            unitPriceUsd: Number(item.unit_price),
+            totalPriceUsd: Number(item.line_total),
+            variant: item.variant_name || undefined,
+            notes: item.customer_notes || undefined,
+          })),
+          subtotalUsd: totals.subtotal,
+          deliveryFeeUsd: totals.deliveryFee,
+          totalUsd: totals.total,
+        };
+        state.checkoutFingerprint = aiToolsExecutor.generateCheckoutFingerprint(checkoutSummary, {
+          id: address.id,
+          label: address.label,
+          formatted: address.formatted_address || address.label,
+        });
+        await this.saveState(customer.id, state);
         const itemsList = cart.items
           .map(i => `• ${i.quantity}x ${i.product_name} ($${i.line_total.toFixed(2)})`)
           .join('\n');
@@ -483,16 +667,25 @@ All ${topStore.completeItemsCount} items are in stock. Should I prepare this car
       }
 
       if (target) {
-        state.selectedMerchantId = target.merchantId;
-        state.selectedMerchantBranchId = target.merchantBranchId;
-        state.selectedMerchantName = target.merchantName;
-
         let notes: string | undefined;
         if (lower.includes('without pickles') || lower.includes('bala kabbis') || lower.includes('bla kabbis') || lower.includes('بدون مخلل')) {
           notes = 'No pickles (بلا كبيس)';
         }
 
+        if (await this.requestMerchantSwitchIfNeeded(customer.id, state, cart, target, 1, notes)) {
+          return {
+            intent: 'CLARIFICATION_REQUIRED',
+            confidence: 0.99,
+            replyText: `Your cart already has items from **${cart.merchant_name || 'another merchant'}**. Clear it and switch to **${target.merchantName}**? Please reply "yes" or "confirm" if you want to switch.`,
+          };
+        }
+
+        state.selectedMerchantId = target.merchantId;
+        state.selectedMerchantBranchId = target.merchantBranchId;
+        state.selectedMerchantName = target.merchantName;
+
         await cartService.addItem(cart.id, target.merchantProductId, 1, notes);
+        invalidateCheckout(state);
         const updatedTotals = await cartService.recalculateCart(cart.id);
         await this.saveState(customer.id, state);
 
@@ -513,8 +706,17 @@ Anything else you'd like to add? (e.g. drinks or fries)`,
       const targetCoke = cokeMatches.find(c => c.merchantId === state.selectedMerchantId) || cokeMatches[0];
 
       if (targetCoke) {
+        if (await this.requestMerchantSwitchIfNeeded(customer.id, state, cart, targetCoke, 1)) {
+          return {
+            intent: 'CLARIFICATION_REQUIRED',
+            confidence: 0.99,
+            replyText: `Your cart already has items from **${cart.merchant_name || 'another merchant'}**. Clear it and switch to **${targetCoke.merchantName}**? Please reply "yes" or "confirm" if you want to switch.`,
+          };
+        }
         await cartService.addItem(cart.id, targetCoke.merchantProductId, 1);
+        invalidateCheckout(state);
         const updatedTotals = await cartService.recalculateCart(cart.id);
+        await this.saveState(customer.id, state);
 
         let budgetAlert = '';
         if (state.budgetLimit && updatedTotals.total > state.budgetLimit) {
@@ -551,6 +753,8 @@ Anything else you'd like to add? (e.g. drinks or fries)`,
         };
       }
       const updatedTotals = await cartService.recalculateCart(cart.id);
+      invalidateCheckout(state);
+      await this.saveState(customer.id, state);
 
       return {
         intent: 'UPDATE_QUANTITY',
@@ -570,6 +774,8 @@ Anything else you'd like to add? (e.g. drinks or fries)`,
         };
       }
       const updatedTotals = await cartService.recalculateCart(cart.id);
+      invalidateCheckout(state);
+      await this.saveState(customer.id, state);
 
       return {
         intent: 'UPDATE_QUANTITY',
@@ -582,6 +788,8 @@ Anything else you'd like to add? (e.g. drinks or fries)`,
     // "without pickles" / "bala kabbis" / "extra garlic" (standalone)
     if (lower.includes('without pickles') || lower.includes('bala kabbis') || lower.includes('bla kabbis') || lower.includes('بدون مخلل')) {
       await cartService.updateItemNotes(cart.id, 'meal', 'No pickles (بلا كبيس)');
+      invalidateCheckout(state);
+      await this.saveState(customer.id, state);
       return {
         intent: 'PRODUCT_MODIFICATION',
         confidence: 0.95,
@@ -594,6 +802,8 @@ Anything else you'd like to add? (e.g. drinks or fries)`,
     if (lower.includes('remove') && (lower.includes('coke') || lower.includes('cola'))) {
       await cartService.removeItem(cart.id, 'coke');
       const updatedTotals = await cartService.recalculateCart(cart.id);
+      invalidateCheckout(state);
+      await this.saveState(customer.id, state);
       return {
         intent: 'REMOVE_ITEM',
         confidence: 0.95,

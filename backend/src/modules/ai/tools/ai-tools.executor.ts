@@ -210,8 +210,8 @@ export class AiToolsExecutor {
       typeof mutationCountOrUserMessage === 'string'
         ? mutationCountOrUserMessage
         : typeof optionsOrUserMessage === 'string'
-        ? optionsOrUserMessage
-        : optionalUserMessage;
+          ? optionsOrUserMessage
+          : optionalUserMessage;
     const options = typeof optionsOrUserMessage === 'object' && optionsOrUserMessage !== null ? optionsOrUserMessage : undefined;
 
     // Normalize legacy state fields if present
@@ -802,7 +802,31 @@ export class AiToolsExecutor {
           };
         }
 
-        // 2. Stage and Address Requirement Checks
+        // 2. Resolve an already-placed order before requiring checkout-stage
+        // prerequisites. Repeating confirmation after order placement is safe
+        // and must return the existing order without re-creating it.
+        if (
+          state.activeOrderSummary &&
+          (state.stage === 'ORDER_PLACED' || state.stage === 'TRACKING_ORDER') &&
+          !state.pendingMerchantSwitch &&
+          !state.pendingClarification
+        ) {
+          return {
+            toolName,
+            success: true,
+            result: {
+              action: 'IDEMPOTENT_CONFIRMATION',
+              order_id: state.activeOrderSummary.orderId,
+              order_number: state.activeOrderSummary.orderNumber,
+              status: state.activeOrderSummary.status,
+              total: `$${Number(state.activeOrderSummary.totalUsd).toFixed(2)}`,
+              message: 'Order was already created for this checkout.',
+            },
+            stateChanged: false,
+          };
+        }
+
+        // 3. Stage and Address Requirement Checks
         if (
           state.stage !== 'AWAITING_CONFIRMATION' ||
           !state.awaitingConfirmation ||
@@ -823,9 +847,8 @@ export class AiToolsExecutor {
           };
         }
 
-        // Idempotency is only valid after proving this is still the current
-        // checkout stage. A pending merchant switch can never return an old
-        // order as a successful confirmation.
+        // Idempotency during the active checkout stage is also safe. A pending
+        // merchant switch can never return an old order as successful.
         if (state.activeOrderSummary) {
           return {
             toolName,
@@ -853,7 +876,7 @@ export class AiToolsExecutor {
           };
         }
 
-        // 3. Server-Enforced Checkout Revision Fingerprint Check (Audit Finding Area C)
+        // 4. Server-Enforced Checkout Revision Fingerprint Check (Audit Finding Area C)
         const currentFingerprint = this.generateCheckoutFingerprint(summary, state.selectedAddress);
         if (!state.checkoutFingerprint || currentFingerprint !== state.checkoutFingerprint) {
           invalidateCheckout(state);
@@ -919,9 +942,9 @@ export class AiToolsExecutor {
           totalUsd: order.grand_total,
           createdAt: new Date().toISOString(),
         };
-        invalidateCheckout(state);
         state.cartSummary = null;
         transitionConversationStage(state, 'ORDER_PLACED');
+        invalidateCheckout(state);
 
         return {
           toolName,

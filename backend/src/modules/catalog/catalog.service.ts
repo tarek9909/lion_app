@@ -51,15 +51,17 @@ export class CatalogService {
    */
   async searchProducts(
     rawQuery: string,
-    maxBudgetOrOptions?: number | { maxBudget?: number | null; preference?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null } | null,
+    maxBudgetOrOptions?: number | { maxBudget?: number | null; preference?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null; shadowMode?: boolean } | null,
     preferenceParam?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null
   ): Promise<SearchResult[]> {
     let maxBudget: number | null = null;
     let preference: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null = null;
+    let shadowMode = false;
 
     if (typeof maxBudgetOrOptions === 'object' && maxBudgetOrOptions !== null) {
       maxBudget = maxBudgetOrOptions.maxBudget ?? null;
       preference = maxBudgetOrOptions.preference ?? null;
+      shadowMode = maxBudgetOrOptions.shadowMode ?? false;
     } else if (typeof maxBudgetOrOptions === 'number') {
       maxBudget = maxBudgetOrOptions;
       preference = preferenceParam ?? null;
@@ -196,15 +198,17 @@ export class CatalogService {
       }
     }
 
-    // Record Search Session in Database Telemetry
-    try {
-      await execute(
-        `INSERT INTO search_sessions (public_id, raw_query, normalized_query, requested_budget, preference, result_count)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [uuidv4(), rawQuery, normalized, maxBudget || null, preference || null, results.length]
-      );
-    } catch {
-      // Telemetry non-fatal
+    // Shadow execution must remain mutation-free, including telemetry writes.
+    if (!shadowMode) {
+      try {
+        await execute(
+          `INSERT INTO search_sessions (public_id, raw_query, normalized_query, requested_budget, preference, result_count)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [uuidv4(), rawQuery, normalized, maxBudget || null, preference || null, results.length]
+        );
+      } catch {
+        // Telemetry non-fatal
+      }
     }
 
     if (results.length === 0) return [];
@@ -251,7 +255,8 @@ export class CatalogService {
    * Supermarket whole-basket comparison (G-026, G-027)
    */
   async compareBasket(
-    requestedItems: BasketItemRequest[]
+    requestedItems: BasketItemRequest[],
+    shadowMode = false
   ): Promise<BasketComparisonResult[]> {
     const supermarkets = await query<any[]>(`
       SELECT m.id as merchantId, mb.id as branchId, m.name, COALESCE(dz.base_delivery_fee, 1.50) as deliveryFee
@@ -281,7 +286,7 @@ export class CatalogService {
       const missingItems: string[] = [];
 
       for (const item of requestedItems) {
-        const matches = await this.searchProducts(item.query);
+        const matches = await this.searchProducts(item.query, { shadowMode });
         const storeMatch = matches.find(m => m.merchantId === sm.merchantId);
 
         if (storeMatch) {
@@ -327,9 +332,10 @@ export class CatalogService {
   }
 
   async compareSupermarketBasket(
-    requestedItems: BasketItemRequest[]
+    requestedItems: BasketItemRequest[],
+    shadowMode = false
   ): Promise<BasketComparisonResult[]> {
-    return this.compareBasket(requestedItems);
+    return this.compareBasket(requestedItems, shadowMode);
   }
 
   async getAllMerchants(): Promise<any[]> {

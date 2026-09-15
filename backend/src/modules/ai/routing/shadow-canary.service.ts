@@ -13,6 +13,13 @@ export interface RoutingConfig {
   canaryPercentage: number; // 0 to 100
 }
 
+export interface ProviderProcessOptions {
+  shadowMode?: boolean;
+  canary?: boolean;
+  requestId?: string;
+  conversationId?: number;
+}
+
 export class ShadowCanaryRouter {
   private config: RoutingConfig = {
     stableProvider: config.ai.stableProvider || (config.ai.provider === 'gemini' ? 'gemini' : 'smart_nlu'),
@@ -76,7 +83,7 @@ export class ShadowCanaryRouter {
     phone: string,
     messageText: string,
     mediaType?: 'text' | 'image' | 'audio' | 'location',
-    stableProcessor?: (p: string, m: string, media?: any) => Promise<AIProcessResult>,
+    stableProcessor?: (p: string, m: string, media?: any, options?: ProviderProcessOptions) => Promise<AIProcessResult>,
     options?: { requestId?: string }
   ): Promise<{ result: AIProcessResult; executionMode: 'LIVE' | 'CANARY'; shadowRan: boolean; requestId?: string }> {
     const effectiveRoutingMode =
