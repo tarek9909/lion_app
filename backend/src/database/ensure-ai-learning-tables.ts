@@ -33,6 +33,11 @@ export async function ensureAILearningTables(): Promise<void> {
     // projection. The full value is also retained in state_json.
     await execute(`ALTER TABLE conversation_state MODIFY COLUMN pending_question TEXT NULL;`);
 
+    // Cart and order services reference these tables/columns on every AI turn.
+    // Keep the schema self-healing for existing deployments as well as fresh DBs.
+    const { ensureOrderBatchSchema } = await import('./migrations/ensure-order-batch-schema.js');
+    await ensureOrderBatchSchema();
+
     // 2. Training curation queue (sanitized text ONLY, no raw PII)
     await execute(`
       CREATE TABLE IF NOT EXISTS training_curation_queue (
