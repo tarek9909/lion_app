@@ -8,12 +8,11 @@ All actionable in-repository findings from the Gemini completion-claim audit are
 
 The following remain explicitly outside a local completion claim:
 
-- Real Meta WhatsApp delivery and receipt on a physical test number.
 - Real Meta media download.
 - Real Whisper transcription and live vision-provider output.
 - Human approval of synthetic training examples.
 
-These boundaries are documented as pending; they are not counted as passing evidence.
+The live Meta text/webhook path is separately verified on the demo server. The Meta test number still has Meta's normal allowlist restriction: only authorized test recipient numbers can receive test-account outbound messages.
 
 ## Start the demo
 
@@ -96,4 +95,8 @@ Both master runners create a validated disposable database named `lion_delivery_
 
 ## External verification handoff
 
-Before claiming full provider verification, set real non-placeholder credentials in a secure environment and run the live Meta, Whisper, vision, and Gemini rehearsals with real fixtures. Record receipt IDs, provider response metadata, acoustic WER, image matching results, and human review approval separately from the local results above.
+The deployed server verification on 2026-09-15 confirmed HTTP 200 health with MySQL and Redis up, successful webhook verification, the configured Meta phone ID and WABA subscription, inbound events marked `PROCESSED`, and outbound bot replies marked `SENT`/`DELIVERED`/`READ`.
+
+For a Meta test-number inbound rehearsal, add the tester's WhatsApp number to Meta's authorized test recipients and send a normal WhatsApp message to the test number. The Meta dashboard's **Send a message** control is outbound-only; it cannot create the inbound customer event. Error `131030` means the recipient is not authorized by Meta and must be added in Meta before Lion can deliver a reply.
+
+Real Meta media download, real Whisper transcription, live vision-provider output, and human approval of synthetic training examples remain separate provider-verification tasks.

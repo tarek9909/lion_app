@@ -57,6 +57,7 @@ app secrets, SSH passwords, or other credentials.
 - [x] Confirm the webhook receives and acknowledges the message.
 - [x] Confirm the bot persists the conversation and sends a reply through Meta Cloud API.
 - [x] Test the authorized driver and merchant recipient numbers. Driver and merchant `96171203157` completed end-to-end. Meta accepted the merchant outbound `hello_world` test message; the merchant inbound event identified `from=96171203157`, passed signature verification, was processed, persisted, and produced bot outbound messages marked `SENT`.
+- [x] Confirm the Meta test-recipient boundary: a non-authorized recipient is rejected by Meta with error `131030` (`Recipient phone number not in allowed list`), and Lion classifies it as a permanent `RECIPIENT_NOT_ALLOWED` error with no retry loop.
 - [x] Test voice-note and image webhook paths. Live Meta events from merchant `96171203157` were received as `INBOUND_AUDIO` and `INBOUND_IMAGE`, signature-verified, processed, persisted in `message_media`, and followed by bot replies marked `SENT`. The deployed demo intentionally uses deterministic `MEDIA_MODE=FIXTURE` processing.
 - [x] Confirm webhook signature validation and duplicate-event handling.
 - [x] Confirm logs contain no credentials.
@@ -68,6 +69,12 @@ app secrets, SSH passwords, or other credentials.
 - [x] Record any limitations, especially Meta test-recipient limits, temporary-token lifetime, and demo-only media behavior.
 - [x] Remove temporary debugging output and verify the working tree does not contain secrets.
 - [x] Marked complete after all applicable deployment, webhook, text, audio, image, driver, and merchant tests passed.
+
+## 9. Meta test-number usage
+
+- The Meta **Try it out / Send a message** control sends an outbound message from the test number to the selected recipient. It does not simulate an inbound customer message to Lion.
+- To test the inbound AI path, add the tester's WhatsApp number under Meta's test recipient phone numbers, then send a normal WhatsApp message from that phone to `+1 555-145-8031`.
+- If Meta returns `131030`, add/verify that sender number in the Meta test-recipient list or use one already authorized. This is a Meta test-account restriction, not a webhook or Gemini failure.
 
 ## 8. Dashboard extension deployment
 

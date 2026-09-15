@@ -11,7 +11,7 @@ export interface MetaErrorClassification {
   code?: number;
   isPermanent: boolean;
   canRetry: boolean;
-  category: 'RATE_LIMIT' | 'WINDOW_EXPIRED' | 'UNDELIVERABLE' | 'AUTH_ERROR' | 'SERVER_ERROR' | 'UNKNOWN';
+  category: 'RATE_LIMIT' | 'WINDOW_EXPIRED' | 'UNDELIVERABLE' | 'RECIPIENT_NOT_ALLOWED' | 'AUTH_ERROR' | 'SERVER_ERROR' | 'UNKNOWN';
 }
 
 export function classifyMetaError(status: number, data: any): MetaErrorClassification {
@@ -21,6 +21,9 @@ export function classifyMetaError(status: number, data: any): MetaErrorClassific
   }
   if (code === 131047) {
     return { code, isPermanent: true, canRetry: false, category: 'WINDOW_EXPIRED' };
+  }
+  if (code === 131030) {
+    return { code, isPermanent: true, canRetry: false, category: 'RECIPIENT_NOT_ALLOWED' };
   }
   if (status === 429 || code === 80007) {
     return { code, isPermanent: false, canRetry: true, category: 'RATE_LIMIT' };
@@ -238,7 +241,10 @@ export class WhatsAppService {
         if (!response.ok) {
           const classification = classifyMetaError(response.status, data);
           if (classification.isPermanent) {
-            console.warn(`[WhatsApp Service] Permanent Meta Error ${response.status} (${classification.category}):`, data);
+            const operatorHint = classification.category === 'RECIPIENT_NOT_ALLOWED'
+              ? ' Add this test recipient to Meta WhatsApp API Configuration > Recipient Phone Numbers.'
+              : '';
+            console.warn(`[WhatsApp Service] Permanent Meta Error ${response.status} (${classification.category}).${operatorHint}`, data);
             if (persistFailure) {
               await this.persistOutboundMessage(sanitizedTo, undefined, messageText, 'FAILED', 'META_CLOUD_API', conversationId);
             }

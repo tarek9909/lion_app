@@ -137,6 +137,7 @@ export async function runFailureAndRetryTests(): Promise<boolean> {
   // 8. Meta Error Classification & Retry Boundary (G-053)
   const undeliverable = classifyMetaError(400, { error: { code: 131026 } });
   const windowExpired = classifyMetaError(400, { error: { code: 131047 } });
+  const recipientNotAllowed = classifyMetaError(400, { error: { code: 131030 } });
   const rateLimit = classifyMetaError(429, { error: { code: 80007 } });
   const serverError = classifyMetaError(503, {});
   const authError = classifyMetaError(401, { error: { code: 190 } });
@@ -148,6 +149,10 @@ export async function runFailureAndRetryTests(): Promise<boolean> {
   assert(
     windowExpired.isPermanent && !windowExpired.canRetry && windowExpired.category === 'WINDOW_EXPIRED',
     'Meta error 131047 classified as permanent WINDOW_EXPIRED (no retry) (G-053)'
+  );
+  assert(
+    recipientNotAllowed.isPermanent && !recipientNotAllowed.canRetry && recipientNotAllowed.category === 'RECIPIENT_NOT_ALLOWED',
+    'Meta error 131030 classified as permanent RECIPIENT_NOT_ALLOWED (no retry) (G-053)'
   );
   assert(
     !rateLimit.isPermanent && rateLimit.canRetry && rateLimit.category === 'RATE_LIMIT',
