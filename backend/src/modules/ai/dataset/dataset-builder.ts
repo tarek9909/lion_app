@@ -41,12 +41,12 @@ export function assignSplit(
   return 'test';
 }
 
-export function generateAllDatasets(): void {
+export function generateAllDatasets(outputDir?: string): void {
   const baseDir = path.resolve(process.cwd(), '../datasets/v1');
   const altDir = path.resolve(process.cwd(), 'datasets/v1');
-  const targetDir = fs.existsSync(path.resolve(process.cwd(), '../Lion_Delivery_Full_MySQL_Database.sql'))
+  const targetDir = outputDir || (fs.existsSync(path.resolve(process.cwd(), '../Lion_Delivery_Full_MySQL_Database.sql'))
     ? path.resolve(process.cwd(), '../datasets/v1')
-    : altDir;
+    : altDir);
 
   if (!fs.existsSync(targetDir)) {
     fs.mkdirSync(targetDir, { recursive: true });
@@ -703,25 +703,32 @@ export function generateAllDatasets(): void {
   writeJsonl(path.join(targetDir, 'image_candidates.jsonl'), imageRecords);
   writeJsonl(path.join(targetDir, 'management_ai.jsonl'), managementAiRecords);
 
-  // Write Dataset Manifest reporting human review status honestly
-  const totalSyntheticSeeds =
-    singleTurnRecords.length +
-    multiTurnRecords.length +
-    clarificationRecords.length +
-    safetyRecords.length +
-    voiceRecords.length +
-    imageRecords.length +
-    managementAiRecords.length;
+  // Write Dataset Manifest from the records themselves so the manifest cannot
+  // drift from per-record provenance (safety rows are EDGE_CASE, not seeds).
+  const allDatasetRecords = [
+    ...singleTurnRecords,
+    ...multiTurnRecords,
+    ...clarificationRecords,
+    ...safetyRecords,
+    ...voiceRecords,
+    ...imageRecords,
+    ...managementAiRecords,
+  ];
+  const provenanceBreakdown = allDatasetRecords.reduce(
+    (counts, record) => {
+      counts[record.provenance] = (counts[record.provenance] || 0) + 1;
+      return counts;
+    },
+    { SYNTHETIC_SEED: 0, CUSTOMER_LOG: 0, EDGE_CASE: 0 } as Record<string, number>
+  );
+  const totalSyntheticSeeds = provenanceBreakdown.SYNTHETIC_SEED;
 
   const manifest = {
     datasetVersion: '1.0.0',
     generatedAt: new Date().toISOString(),
+    totalRecords: allDatasetRecords.length,
     totalSyntheticSeedRecords: totalSyntheticSeeds,
-    provenanceBreakdown: {
-      SYNTHETIC_SEED: totalSyntheticSeeds,
-      CUSTOMER_LOG: 0,
-      EDGE_CASE: safetyRecords.length,
-    },
+    provenanceBreakdown,
     humanReviewAudit: {
       status: 'PENDING_HUMAN_REVIEW',
       targetRecords: '3,000 to 5,000 human-annotated dialogue records',

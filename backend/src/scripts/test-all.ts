@@ -1,16 +1,38 @@
-import { runApiTests } from './test-api.js';
-import { runWebhookTests } from './test-webhook.js';
-import { runWebSocketTests } from './test-websocket.js';
-import { runFailureAndRetryTests } from './test-failures.js';
-import { runConversationTestPack } from './test-conversations.js';
-import { runConsecutiveRehearsals } from './test-rehearsal.js';
-import { runBackupDemoScenario } from './demo-backup-scenario.js';
-import { runConfigMatrixTests } from './test-config-matrix.js';
-import { runGeminiIntegrationTests } from './test-gemini.js';
-import { runDemoGapTests } from './test-demo-gaps.js';
-import { runAiEdgeCaseTests } from './test-ai-edgecases.js';
+import { createIsolatedDatabase, dropIsolatedDatabase, isolatedRedisUrl } from './test-isolation.js';
 
 async function runAllSuites() {
+  const [
+    { runApiTests },
+    { runWebhookTests },
+    { runWebSocketTests },
+    { runFailureAndRetryTests },
+    { runConversationTestPack },
+    { runConsecutiveRehearsals },
+    { runBackupDemoScenario },
+    { runConfigMatrixTests },
+    { runGeminiIntegrationTests },
+    { runDemoGapTests },
+    { runAiEdgeCaseTests },
+    { runShadowImmutabilityTests },
+    { runEvaluatorSafetyTests },
+    { runInteractiveNotFoundTests },
+  ] = await Promise.all([
+    import('./test-api.js'),
+    import('./test-webhook.js'),
+    import('./test-websocket.js'),
+    import('./test-failures.js'),
+    import('./test-conversations.js'),
+    import('./test-rehearsal.js'),
+    import('./demo-backup-scenario.js'),
+    import('./test-config-matrix.js'),
+    import('./test-gemini.js'),
+    import('./test-demo-gaps.js'),
+    import('./test-ai-edgecases.js'),
+    import('./test-shadow-immutability.js'),
+    import('./test-evaluator-safety.js'),
+    import('./test-interactive-not-found.js'),
+  ]);
+
   console.log('════════════════════════════════════════════════════════════');
   console.log('🦁 Lion Delivery Master Integration Test Runner');
   console.log('════════════════════════════════════════════════════════════\n');
@@ -71,6 +93,36 @@ async function runAllSuites() {
   const aiEdgeOk = await runAiEdgeCaseTests();
   results.push({ name: 'AI Flow Edge Cases', ok: aiEdgeOk });
 
+  console.log('\n[12/14] Running Shadow Zero-Mutation Boundary Suite...');
+  let shadowImmutableOk = true;
+  try {
+    await runShadowImmutabilityTests();
+  } catch (error) {
+    shadowImmutableOk = false;
+    console.error(error);
+  }
+  results.push({ name: 'Shadow Zero-Mutation Boundary', ok: shadowImmutableOk });
+
+  console.log('\n[13/14] Running Evaluator Safety & Exact-Typing Suite...');
+  let evaluatorSafetyOk = true;
+  try {
+    await runEvaluatorSafetyTests();
+  } catch (error) {
+    evaluatorSafetyOk = false;
+    console.error(error);
+  }
+  results.push({ name: 'Evaluator Safety & Exact Typing', ok: evaluatorSafetyOk });
+
+  console.log('\n[14/14] Running Interactive Not-Found & Clarification Suite...');
+  let interactiveNotFoundOk = true;
+  try {
+    runInteractiveNotFoundTests();
+  } catch (error) {
+    interactiveNotFoundOk = false;
+    console.error(error);
+  }
+  results.push({ name: 'Interactive Not-Found & Clarification', ok: interactiveNotFoundOk });
+
   const elapsed = ((Date.now() - start) / 1000).toFixed(2);
 
   console.log('\n════════════════════════════════════════════════════════════');
@@ -85,15 +137,36 @@ async function runAllSuites() {
 
   console.log('════════════════════════════════════════════════════════════');
   if (allPassed) {
-    console.log('🏆 ALL 11 TEST SUITES PASSED CLEANLY WITH ZERO FAILURES!');
-    process.exit(0);
+    console.log('🏆 ALL 14 TEST SUITES PASSED CLEANLY WITH ZERO FAILURES!');
   } else {
     console.error('❌ One or more test suites failed.');
-    process.exit(1);
   }
+  return allPassed;
 }
 
-runAllSuites().catch((err) => {
+async function main() {
+  let databaseName: string | undefined;
+  let exitCode = 1;
+  try {
+    databaseName = await createIsolatedDatabase();
+    process.env.NODE_ENV = 'test';
+    process.env.DB_NAME = databaseName;
+    process.env.REDIS_URL = isolatedRedisUrl();
+    const { seedDemoData } = await import('./seed-demo.js');
+    await seedDemoData();
+    exitCode = (await runAllSuites()) ? 0 : 1;
+  } catch (err) {
+    console.error('Fatal isolated test runner error:', err);
+  } finally {
+    if (databaseName) {
+      await dropIsolatedDatabase(databaseName);
+      console.log('Removed isolated test database ' + databaseName);
+    }
+  }
+  process.exit(exitCode);
+}
+
+main().catch((err) => {
   console.error('Fatal test runner error:', err);
   process.exit(1);
 });

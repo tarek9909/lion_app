@@ -24,8 +24,9 @@ import {
   sanitizeStateSnapshot,
 } from './state/ai-state.types.js';
 import { aiTelemetryService } from './telemetry/ai-telemetry.service.js';
-import { query } from '../../database/db.js';
 import { calculateGeminiCost } from './telemetry/gemini-pricing.js';
+import { randomUUID } from 'node:crypto';
+import { INTERACTIVE_NOT_FOUND_REPLY, isNotFoundError, resultHasNoCatalogMatches } from './interactive-not-found.js';
 
 export function detectLanguage(text: string): string {
   const clean = (text || '').trim();
@@ -77,6 +78,48 @@ export class GeminiService {
 
   resetFetchFn() {
     this.fetchFn = fetch;
+  }
+
+  private async recordFailureTelemetry(input: {
+    conversationId: number | null;
+    requestId: string;
+    rawInput: string;
+    stateBefore: any;
+    stateAfter: any;
+    model: string;
+    startedAt: number;
+    errorCode: string;
+    errorMessage: string;
+  }): Promise<void> {
+    try {
+      await aiTelemetryService.recordInteraction({
+        conversationId: input.conversationId,
+        aiContext: 'CUSTOMER_WHATSAPP',
+        provider: 'gemini',
+        model: input.model,
+        interactionType: 'CHAT_TURN',
+        rawInput: input.rawInput,
+        rawOutput: '',
+        detectedIntent: 'GREETING',
+        detectedLanguage: detectLanguage(input.rawInput),
+        toolCalls: [],
+        stateBefore: input.stateBefore,
+        stateAfter: input.stateAfter,
+        promptVersion: PROMPT_VERSION,
+        toolSchemaVersion: '2.0.0',
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs: Date.now() - input.startedAt,
+        estimatedCostUsd: 0,
+        success: false,
+        executionMode: 'LIVE',
+        requestId: input.requestId,
+        errorCode: input.errorCode,
+        errorMessage: input.errorMessage,
+      });
+    } catch (telemetryErr) {
+      console.warn('[Gemini Service] Error recording failure telemetry:', telemetryErr);
+    }
   }
 
   private clampString(value: unknown, maxLength: number): string {
@@ -174,18 +217,10 @@ export class GeminiService {
       customer = await customerService.findOrCreateByPhone(whatsappNumber);
     }
 
-    let conversationId: number | null = options?.conversationId || null;
-    if (!conversationId && !options?.shadowMode && customer.id > 0) {
-      try {
-        const convRows = await query<any[]>(
-          `SELECT id FROM conversations WHERE customer_id = ? AND status = 'OPEN' ORDER BY id DESC LIMIT 1`,
-          [customer.id]
-        );
-        if (convRows.length > 0) {
-          conversationId = convRows[0].id;
-        }
-      } catch {}
-    }
+    // The inbound controller/processor owns the persisted conversation ID.
+    // Do not guess a conversation by querying the latest open row.
+    const conversationId: number | null = options?.conversationId || null;
+    const requestId = options?.requestId || randomUUID();
 
     const state = customer.id > 0 ? await loadConversationState(customer.id) : createInitialState(-1);
     const stateBeforeSnapshot = sanitizeStateSnapshot(state);
@@ -307,6 +342,7 @@ export class GeminiService {
     let mutationsExecutedCount = 0;
     const recordedToolCalls: any[] = [];
     const recordedToolResults: any[] = [];
+    let interactiveNotFound = false;
     let promptTokensTotal = 0;
     let candidatesTokensTotal = 0;
 
@@ -342,6 +378,17 @@ export class GeminiService {
         });
       } catch (err: any) {
         console.error('[Gemini API Network Error]:', err.message);
+        await this.recordFailureTelemetry({
+          conversationId,
+          requestId,
+          rawInput: text,
+          stateBefore: stateBeforeSnapshot,
+          stateAfter: sanitizeStateSnapshot(state),
+          model,
+          startedAt: startTime,
+          errorCode: 'GEMINI_NETWORK_ERROR',
+          errorMessage: err.message,
+        });
         throw new Error(
           `Gemini API connection error: ${err.name === 'TimeoutError' ? 'request timed out' : err.message}`
         );
@@ -350,6 +397,17 @@ export class GeminiService {
       if (!response.ok) {
         const errText = await response.text();
         console.error(`[Gemini API Error HTTP ${response.status}]:`, errText);
+        await this.recordFailureTelemetry({
+          conversationId,
+          requestId,
+          rawInput: text,
+          stateBefore: stateBeforeSnapshot,
+          stateAfter: sanitizeStateSnapshot(state),
+          model,
+          startedAt: startTime,
+          errorCode: `GEMINI_HTTP_${response.status}`,
+          errorMessage: errText.slice(0, 1000),
+        });
         throw new Error(`Gemini API error (HTTP ${response.status}): ${errText}`);
       }
 
@@ -361,6 +419,17 @@ export class GeminiService {
 
       const candidate = responseData.candidates?.[0];
       if (!candidate || !candidate.content) {
+        await this.recordFailureTelemetry({
+          conversationId,
+          requestId,
+          rawInput: text,
+          stateBefore: stateBeforeSnapshot,
+          stateAfter: sanitizeStateSnapshot(state),
+          model,
+          startedAt: startTime,
+          errorCode: 'GEMINI_EMPTY_RESPONSE',
+          errorMessage: 'Gemini API returned an empty response candidate.',
+        });
         throw new Error('Gemini API returned an empty response candidate.');
       }
 
@@ -378,8 +447,7 @@ export class GeminiService {
           recordedToolCalls.push({ name: toolName, args: toolArgs });
 
           let toolResult: any;
-
-
+          let toolErrorCode: string | undefined;
 
           // Maintain ONE mutation counter across all Gemini tool rounds for the complete turn
           if (isMutatingTool(toolName) && mutationsExecutedCount >= 1) {
@@ -389,6 +457,7 @@ export class GeminiService {
               message:
                 'Only one cart or order change can be performed per customer message. Ask the customer which change they want first.',
             };
+            toolErrorCode = 'MUTATION_LIMIT_EXCEEDED';
           } else {
             const execution = await this.executeTool(
               toolName,
@@ -403,6 +472,15 @@ export class GeminiService {
               execution.result !== undefined
                 ? execution.result
                 : { success: execution.success, error: execution.error };
+            toolErrorCode = execution.errorCode;
+
+            if (
+              isNotFoundError(execution.errorCode, execution.error) ||
+              resultHasNoCatalogMatches(toolResult) ||
+              (Array.isArray(toolResult) && toolResult.length > 0 && toolResult.every((entry) => entry?.isComplete === false))
+            ) {
+              interactiveNotFound = true;
+            }
 
             if (execution.success && isMutatingTool(toolName)) {
               mutationsExecutedCount++;
@@ -426,7 +504,7 @@ export class GeminiService {
             }
           }
 
-          recordedToolResults.push({ name: toolName, result: toolResult });
+          recordedToolResults.push({ name: toolName, result: toolResult, errorCode: toolErrorCode });
 
           functionResponseParts.push({
             functionResponse: {
@@ -453,7 +531,9 @@ export class GeminiService {
       break;
     }
 
-    if (!finalText) {
+    if (interactiveNotFound) {
+      finalText = INTERACTIVE_NOT_FOUND_REPLY;
+    } else if (!finalText) {
       finalText =
         'I am here to help you with your order from Lion Delivery! What would you like to eat today? 🦁';
     }
@@ -517,7 +597,7 @@ export class GeminiService {
         estimatedCostUsd: costUsd,
         success: turnSuccess,
         executionMode: options?.shadowMode ? 'SHADOW' : options?.canary ? 'CANARY' : 'LIVE',
-        requestId: options?.requestId || null,
+        requestId,
       });
     } catch (telemetryErr) {
       console.warn('[Gemini Service] Error recording turn telemetry:', telemetryErr);

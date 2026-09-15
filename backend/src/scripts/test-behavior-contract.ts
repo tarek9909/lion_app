@@ -146,7 +146,10 @@ async function runBehaviorContractTests() {
   for (const [toolName, spec] of Object.entries(CANONICAL_TOOL_SPECS)) {
     const decl = allDecls.find((d: any) => d.name === toolName);
     assert(Boolean(decl), `Gemini declaration exists for tool "${toolName}"`);
-    assert(decl.description === spec.description, `Description matches for "${toolName}"`);
+    assert(decl.description.startsWith(spec.description), `Description matches for "${toolName}"`);
+    if (spec.refinement) {
+      assert(decl.description.includes(spec.refinement.message), `Gemini declaration carries refinement guidance for "${toolName}"`);
+    }
 
     const declProps = decl.parameters?.properties || {};
     const declRequired: string[] = decl.parameters?.required || [];

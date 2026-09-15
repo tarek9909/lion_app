@@ -7,6 +7,7 @@ import { cartService } from '../modules/carts/cart.service.js';
 import { orderService } from '../modules/orders/order.service.js';
 import { query } from '../database/db.js';
 import { redis } from '../database/redis.js';
+import { shadowCanaryRouter } from '../modules/ai/routing/shadow-canary.service.js';
 
 export async function runGeminiIntegrationTests(): Promise<boolean> {
   console.log('\n🧪 Starting Gemini 3.8 Flash Integration Test Suite...');
@@ -94,11 +95,13 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
   const origProvider = config.ai.provider;
   const origKey = config.ai.geminiApiKey;
   const origModel = config.ai.geminiModel;
+  const origRouting = shadowCanaryRouter.getConfig();
 
   try {
     // In gemini mode without key, must throw error, NOT silently call smart_nlu
     config.ai.provider = 'gemini';
     config.ai.geminiApiKey = '';
+    shadowCanaryRouter.configure({ stableProvider: 'gemini', routingMode: 'STABLE_ONLY', canaryPercentage: 0 });
     try {
       await aiService.processCustomerMessage(TEST_PHONE, 'bade crispy chicken');
       assert(false, 'Gemini mode without key must throw, not return smart_nlu result');
@@ -111,6 +114,7 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
 
     // In smart_nlu mode, processes customer message normally
     config.ai.provider = 'smart_nlu';
+    shadowCanaryRouter.configure({ stableProvider: 'smart_nlu', routingMode: 'STABLE_ONLY', canaryPercentage: 0 });
     const nluRes = await aiService.processCustomerMessage(TEST_PHONE, 'bade crispy chicken under 15$');
     assert(
       nluRes.intent === 'SEARCH_RESULTS' && nluRes.replyText.includes('Crispy Chicken'),
@@ -120,6 +124,7 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
     config.ai.provider = origProvider;
     config.ai.geminiApiKey = origKey;
     config.ai.geminiModel = origModel;
+    shadowCanaryRouter.configure(origRouting);
   }
 
   // -------------------------------------------------------------

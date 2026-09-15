@@ -3,7 +3,7 @@ import { BEHAVIOR_CONTRACT_VERSION, isMutatingTool } from '../contract/behavior.
 import { getAuthoritativeGeminiToolDeclarations } from '../contract/tool-schemas.js';
 import { getGeminiSystemPrompt, PROMPT_VERSION } from '../prompts/gemini.system-prompt.js';
 import { calculateGeminiCost } from '../telemetry/gemini-pricing.js';
-import { aiToolsExecutor } from '../tools/ai-tools.executor.js';
+import { createEvaluatorSandbox, executeEvaluatorTool } from './evaluator-tool-adapter.js';
 
 export interface TurnEvaluationResult {
   recordId: string;
@@ -14,6 +14,7 @@ export interface TurnEvaluationResult {
   stage: string;
   toolExpected: string | null;
   toolActual: string | null;
+  toolActualCalls: string[];
   toolMatch: boolean;
   argumentsMatch: boolean;
   clarificationMatch: boolean;
@@ -38,6 +39,7 @@ export interface EvaluationReport {
   promptVersion: string;
   datasetVersion: string;
   externalCallsOccurred: boolean;
+  evaluationSource: 'IN_MEMORY_EXPECTED_OUTPUT_SIMULATION' | 'LIVE_GEMINI_WITH_IN_MEMORY_SANDBOX';
   totalRecords: number;
   metrics: {
     toolSelectionMacroF1: number;
@@ -80,16 +82,10 @@ export function deepCompareArguments(expected: any, actual: any): { match: boole
     return { match: false, reason: 'Actual argument value is missing or null' };
   }
   if (typeof expected !== typeof actual) {
-    if (typeof expected === 'number' && typeof actual === 'string' && Number(actual) === expected) {
-      return { match: true };
-    }
-    if (typeof expected === 'string' && typeof actual === 'number' && String(actual) === expected) {
-      return { match: true };
-    }
     return { match: false, reason: `Type mismatch: expected ${typeof expected}, got ${typeof actual}` };
   }
   if (typeof expected === 'string') {
-    const match = expected.trim().toLowerCase() === String(actual).trim().toLowerCase();
+    const match = expected === actual;
     return { match, reason: match ? undefined : `String mismatch: expected '${expected}', got '${actual}'` };
   }
   if (typeof expected === 'number' || typeof expected === 'boolean') {
@@ -177,6 +173,7 @@ export class ModelEvaluator {
           promptVersion,
           datasetVersion,
           externalCallsOccurred: false,
+          evaluationSource: 'LIVE_GEMINI_WITH_IN_MEMORY_SANDBOX',
           totalRecords: records.length,
           metrics: {
             toolSelectionMacroF1: 0,
@@ -221,6 +218,7 @@ export class ModelEvaluator {
       const errors: string[] = [];
 
       let actualTool: string | null = null;
+      const actualToolCalls: string[] = [];
       let actualArgs: Record<string, any> = {};
       let actualReply = '';
       let actualStage = record.state_before?.stage || 'IDLE';
@@ -388,21 +386,9 @@ export class ModelEvaluator {
           parts: [{ text: record.customer_message }],
         });
 
-        // Initialize state machine from record.state_before for sandbox execution
-        const simState: any = {
-          customerId: 9999,
-          stage: record.state_before?.stage || 'IDLE',
-          selectedMerchant: record.state_before?.selected_merchant_name
-            ? { id: 1, name: record.state_before.selected_merchant_name, branchId: 1 }
-            : null,
-          cartSummary: record.state_before?.cart || null,
-          awaitingConfirmation: Boolean(record.state_before?.awaiting_confirmation),
-          checkoutFingerprint: record.state_before?.checkout_fingerprint || null,
-          selectedAddress: record.state_before?.selected_address
-            ? { id: 1, label: record.state_before.selected_address, formatted: record.state_before.selected_address }
-            : null,
-          lastPresentedOptions: [],
-        };
+        // Every real model call uses a fresh in-memory state machine. The
+        // evaluator must never call production cart/order/telemetry services.
+        const sandbox = createEvaluatorSandbox(record);
 
         let round = 0;
         const maxRounds = 5;
@@ -449,56 +435,48 @@ export class ModelEvaluator {
 
           const candidate = data.candidates?.[0];
           const parts = candidate?.content?.parts || [];
-          const functionCallPart = parts.find((p: any) => p.functionCall);
+          const functionCallParts = parts.filter((p: any) => p.functionCall);
           const textPart = parts.find((p: any) => p.text);
 
           if (textPart?.text) {
             actualReply = textPart.text;
           }
 
-          if (functionCallPart?.functionCall) {
-            const callName = functionCallPart.functionCall.name;
-            const callArgs = functionCallPart.functionCall.args || {};
-            actualTool = callName;
-            actualArgs = callArgs;
+          if (functionCallParts.length > 0) {
+            contents.push({ role: 'model', parts });
+            const functionResponses: any[] = [];
+            for (const functionCallPart of functionCallParts) {
+              const callName = functionCallPart.functionCall.name;
+              const callArgs = functionCallPart.functionCall.args || {};
+              if (!actualTool) {
+                actualTool = callName;
+                actualArgs = callArgs;
+              }
+              actualToolCalls.push(callName);
 
-            if (callName === 'confirm_and_create_order') {
-              orderConfirmedCountThisTurn++;
-            }
+              const toolExec = executeEvaluatorTool(
+                sandbox,
+                callName,
+                callArgs,
+                record.customer_message,
+                turnMutationsCount
+              );
 
-            // Execute tool in shadow/sandbox simulation mode against the real state machine
-            const toolExec = await aiToolsExecutor.executeTool(
-              callName,
-              callArgs,
-              9999,
-              simState,
-              turnMutationsCount,
-              { shadowMode: true },
-              record.customer_message
-            );
-
-            if (toolExec.success && isMutatingTool(callName)) {
-              turnMutationsCount++;
-            }
-
-            actualStage = simState.stage;
-
-            // Append function response for multi-round tool loop
-            contents.push({
-              role: 'model',
-              parts: [{ functionCall: functionCallPart.functionCall }],
-            });
-            contents.push({
-              role: 'user',
-              parts: [
-                {
-                  functionResponse: {
-                    name: callName,
-                    response: toolExec.result || { success: toolExec.success, error: toolExec.error },
-                  },
+              if (toolExec.success && isMutatingTool(callName)) turnMutationsCount++;
+              if (toolExec.orderCreated) orderConfirmedCountThisTurn++;
+              if (!toolExec.success) {
+                errors.push(`Tool execution failed: ${callName}: ${toolExec.errorCode || toolExec.error || 'unknown error'}`);
+              }
+              actualStage = sandbox.state.stage;
+              functionResponses.push({
+                functionResponse: {
+                  ...(functionCallPart.functionCall.id ? { id: functionCallPart.functionCall.id } : {}),
+                  name: callName,
+                  response: toolExec.result || { success: toolExec.success, error: toolExec.error },
                 },
-              ],
-            });
+              });
+            }
+            contents.push({ role: 'user', parts: functionResponses });
             continue;
           }
 
@@ -608,6 +586,7 @@ export class ModelEvaluator {
         stage: actualStage,
         toolExpected: record.expected_tool,
         toolActual: actualTool,
+        toolActualCalls: actualToolCalls.length > 0 ? actualToolCalls : actualTool ? [actualTool] : [],
         toolMatch,
         argumentsMatch,
         clarificationMatch,
@@ -758,6 +737,10 @@ export class ModelEvaluator {
       promptVersion,
       datasetVersion,
       externalCallsOccurred: options.mode === 'REAL_GEMINI',
+      evaluationSource:
+        options.mode === 'REAL_GEMINI'
+          ? 'LIVE_GEMINI_WITH_IN_MEMORY_SANDBOX'
+          : 'IN_MEMORY_EXPECTED_OUTPUT_SIMULATION',
       totalRecords,
       metrics: {
         toolSelectionMacroF1,

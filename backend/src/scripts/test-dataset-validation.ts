@@ -1,5 +1,8 @@
 import { generateAllDatasets } from '../modules/ai/dataset/dataset-builder.js';
 import { validateDatasets } from '../modules/ai/dataset/dataset-validator.js';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 function assert(condition: boolean, message: string, extra?: any) {
   if (!condition) {
@@ -12,11 +15,18 @@ function assert(condition: boolean, message: string, extra?: any) {
 async function runDatasetValidationTests() {
   console.log('\n🧪 Starting Dataset Pipeline & Leakage Tests (Phase 4)...');
 
-  // 1. Generate datasets
-  generateAllDatasets();
+  // 1. Generate datasets in a disposable directory so CI cannot rewrite the
+  // shared demo release artifact.
+  const isolatedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lion-dataset-test-'));
+  generateAllDatasets(isolatedDir);
+  fs.mkdirSync(path.join(isolatedDir, 'schemas'), { recursive: true });
+  fs.copyFileSync(
+    path.resolve(process.cwd(), '../datasets/v1/schemas/turn-schema.json'),
+    path.join(isolatedDir, 'schemas', 'turn-schema.json')
+  );
 
   // 2. Validate datasets
-  const results = validateDatasets();
+  const results = validateDatasets(isolatedDir);
 
   assert(results.totalRecords >= 20, `Total dataset records (${results.totalRecords}) >= 20`);
   assert(results.schemaErrors.length === 0, 'Zero schema validation errors', results.schemaErrors);
@@ -47,6 +57,7 @@ async function runDatasetValidationTests() {
   console.log(`  ℹ️  Human Review Target Status: ${results.humanReviewTargetStatus}`);
 
   console.log('\n🏁 Dataset Pipeline & Leakage Tests: All Assertions Passed!\n');
+  fs.rmSync(isolatedDir, { recursive: true, force: true });
 }
 
 runDatasetValidationTests()

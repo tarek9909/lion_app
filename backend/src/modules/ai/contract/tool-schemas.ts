@@ -80,8 +80,8 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
               max: 200,
             },
             quantity: {
-              type: 'NUMBER',
-              description: 'Quantity requested (must be a positive number).',
+              type: 'INTEGER',
+              description: 'Quantity requested (must be a positive whole number).',
               required: true,
               min: 1,
               max: 99,
@@ -376,7 +376,7 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
       confirmation_phrase: {
         type: 'STRING',
         description: 'Explicit confirmation phrase from customer.',
-        required: false,
+        required: true,
         min: 1,
         max: 100,
       },
@@ -499,6 +499,17 @@ function fieldToGeminiProperty(field: ToolFieldSpec): any {
     prop.enum = field.enum;
   }
 
+  if (field.type === 'STRING') {
+    if (field.min !== undefined) prop.minLength = field.min;
+    if (field.max !== undefined) prop.maxLength = field.max;
+  } else if (field.type === 'NUMBER' || field.type === 'INTEGER') {
+    if (field.min !== undefined) prop.minimum = field.min;
+    if (field.max !== undefined) prop.maximum = field.max;
+  } else if (field.type === 'ARRAY') {
+    if (field.min !== undefined) prop.minItems = field.min;
+    if (field.max !== undefined) prop.maxItems = field.max;
+  }
+
   if (field.type === 'ARRAY' && field.items) {
     prop.items = fieldToGeminiProperty(field.items);
   }
@@ -529,7 +540,9 @@ export function buildGeminiDeclaration(spec: ToolDefinitionSpec): any {
 
   const decl: any = {
     name: spec.name,
-    description: spec.description,
+    description: spec.refinement
+      ? `${spec.description} Constraint: ${spec.refinement.message}.`
+      : spec.description,
     parameters: {
       type: 'OBJECT',
       properties,

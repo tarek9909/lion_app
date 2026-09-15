@@ -16,6 +16,7 @@ import {
   isNegatedConfirmation,
   isValidOrderConfirmationPhrase,
 } from './checkout-safety.js';
+import { INTERACTIVE_NOT_FOUND_REPLY } from './interactive-not-found.js';
 
 export { AIContextState, ValidatedIntent, AIProcessResult };
 
@@ -139,6 +140,24 @@ export class AIService {
     state.turnIndex = (state.turnIndex || 0) + 1;
     await this.saveState(customer.id, state);
     const cart = await cartService.getOrCreateActiveCart(customer.id);
+
+    // The order id is an idempotency key for the current checkout only. Once
+    // that order is terminal, a later shopping session must be allowed to
+    // create a new order instead of replaying the historical confirmation.
+    if (state.activeOrderId) {
+      const completedOrderRows: any[] = await query(
+        `SELECT status FROM orders WHERE id = ? LIMIT 1`,
+        [state.activeOrderId],
+      );
+      if (
+        completedOrderRows.length === 0 ||
+        ['DELIVERED', 'CANCELLED', 'MERCHANT_REJECTED'].includes(completedOrderRows[0].status)
+      ) {
+        state.activeOrderId = null;
+        if (state.stage === 'ORDER_PLACED') state.stage = 'IDLE';
+        await this.saveState(customer.id, state);
+      }
+    }
 
     const text = (messageText || '').trim();
     const lower = text.toLowerCase();
@@ -275,8 +294,31 @@ export class AIService {
         state.selectedAddressId = selected.id;
         state.selectedAddressLabel = selected.label;
         state.awaitingConfirmation = true;
+        state.stage = 'AWAITING_CONFIRMATION';
         await this.saveState(customer.id, state);
         const totals = await cartService.recalculateCart(cart.id);
+        const checkoutSummary = {
+          merchantName: cart.merchant_name || null,
+          itemsCount: cart.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+          items: cart.items.map((item) => ({
+            productName: item.product_name,
+            merchantName: cart.merchant_name || '',
+            quantity: Number(item.quantity),
+            unitPriceUsd: Number(item.unit_price),
+            totalPriceUsd: Number(item.line_total),
+            variant: item.variant_name || undefined,
+            notes: item.customer_notes || undefined,
+          })),
+          subtotalUsd: totals.subtotal,
+          deliveryFeeUsd: totals.deliveryFee,
+          totalUsd: totals.total,
+        };
+        state.checkoutFingerprint = aiToolsExecutor.generateCheckoutFingerprint(checkoutSummary, {
+          id: selected.id,
+          label: selected.label,
+          formatted: selected.formatted_address || selected.label,
+        });
+        await this.saveState(customer.id, state);
         return {
           intent: 'ADDRESS_SELECTED',
           confidence: 0.99,
@@ -287,7 +329,7 @@ export class AIService {
       return {
         intent: 'CLARIFICATION_REQUIRED',
         confidence: 0.99,
-        replyText: `I still see more than one matching address. Please reply with a number (1-${candidates.length}) or a neighborhood name.`,
+        replyText: `${INTERACTIVE_NOT_FOUND_REPLY} I can also use a number (1-${candidates.length}) or a neighborhood name.`,
       };
     }
 
@@ -374,7 +416,14 @@ Meanwhile, I can help you search menus, check prices, adjust your cart, or track
         };
       } else if (items.length === 1) {
         const item = items[0];
-        await cartService.updateItemVariant(cart.id, item.product_name, 'Large');
+        const updateRes = await cartService.updateItemVariant(cart.id, item.product_name, 'Large');
+        if (!updateRes.success) {
+          return {
+            intent: 'CLARIFICATION_REQUIRED',
+            confidence: 0.90,
+            replyText: INTERACTIVE_NOT_FOUND_REPLY,
+          };
+        }
         const updatedTotals = await cartService.recalculateCart(cart.id);
 
         return {
@@ -581,6 +630,12 @@ Delivery Fee: $${totals.deliveryFee.toFixed(2)}
 Reply **"confirm"** to place your order!`,
         };
       }
+
+      return {
+        intent: 'CLARIFICATION_REQUIRED',
+        confidence: 0.99,
+        replyText: INTERACTIVE_NOT_FOUND_REPLY,
+      };
     }
 
     // -------------------------------------------------------------
@@ -599,6 +654,14 @@ Reply **"confirm"** to place your order!`,
 
       const merchantName = state.selectedMerchantName || 'Chicken House';
       const results = await catalogService.searchProducts('crispy chicken');
+
+      if (results.length === 0) {
+        return {
+          intent: 'IMAGE_SEARCH',
+          confidence: 0.90,
+          replyText: INTERACTIVE_NOT_FOUND_REPLY,
+        };
+      }
 
       return {
         intent: 'IMAGE_SEARCH',
@@ -649,6 +712,12 @@ ${breakdown}
 All ${topStore.completeItemsCount} items are in stock. Should I prepare this cart for you?`,
         };
       }
+
+      return {
+        intent: 'BASKET_COMPARISON',
+        confidence: 0.90,
+        replyText: INTERACTIVE_NOT_FOUND_REPLY,
+      };
     }
 
     // -------------------------------------------------------------
@@ -699,6 +768,12 @@ All ${topStore.completeItemsCount} items are in stock. Should I prepare this car
 Anything else you'd like to add? (e.g. drinks or fries)`,
         };
       }
+
+      return {
+        intent: 'SEARCH_RESULTS',
+        confidence: 0.90,
+        replyText: INTERACTIVE_NOT_FOUND_REPLY,
+      };
     }
 
     if (lower.includes('add coke zero') || lower.includes('zid coke zero') || (lower.includes('coke zero') && lower.includes('add'))) {
@@ -732,6 +807,12 @@ Anything else you'd like to add? (e.g. drinks or fries)`,
 🛒 New total: **$${updatedTotals.total.toFixed(2)}**. Ready to checkout, or would you like anything else?`,
         };
       }
+
+      return {
+        intent: 'SEARCH_RESULTS',
+        confidence: 0.90,
+        replyText: INTERACTIVE_NOT_FOUND_REPLY,
+      };
     }
 
     // -------------------------------------------------------------
@@ -750,6 +831,13 @@ Anything else you'd like to add? (e.g. drinks or fries)`,
           intent: 'CLARIFICATION_REQUIRED',
           confidence: 0.90,
           replyText: 'Which item would you like to update to 1?',
+        };
+      }
+      if (!updateRes.success) {
+        return {
+          intent: 'CLARIFICATION_REQUIRED',
+          confidence: 0.90,
+          replyText: INTERACTIVE_NOT_FOUND_REPLY,
         };
       }
       const updatedTotals = await cartService.recalculateCart(cart.id);
@@ -771,6 +859,13 @@ Anything else you'd like to add? (e.g. drinks or fries)`,
           intent: 'CLARIFICATION_REQUIRED',
           confidence: 0.90,
           replyText: 'Which item would you like to make 2?',
+        };
+      }
+      if (!updateRes.success) {
+        return {
+          intent: 'CLARIFICATION_REQUIRED',
+          confidence: 0.90,
+          replyText: INTERACTIVE_NOT_FOUND_REPLY,
         };
       }
       const updatedTotals = await cartService.recalculateCart(cart.id);
@@ -835,6 +930,14 @@ Their **${top.productName}** is $${top.basePrice.toFixed(2)}. Would you like me 
       state.lastPresentedOptions = cheapSearch;
       await this.saveState(customer.id, state);
 
+      if (cheapSearch.length === 0) {
+        return {
+          intent: 'SEARCH_CHEAPER',
+          confidence: 0.90,
+          replyText: INTERACTIVE_NOT_FOUND_REPLY,
+        };
+      }
+
       const top = cheapSearch[0];
       return {
         intent: 'SEARCH_CHEAPER',
@@ -874,6 +977,14 @@ Shall I add this to your cart?`,
       state.lastPresentedOptions = dessertOptions;
       await this.saveState(customer.id, state);
 
+      if (dessertOptions.length === 0) {
+        return {
+          intent: 'SEARCH_DESSERTS',
+          confidence: 0.90,
+          replyText: INTERACTIVE_NOT_FOUND_REPLY,
+        };
+      }
+
       const itemsText = dessertOptions
         .map((o, idx) => `${idx + 1}. *${o.productName}* from **${o.merchantName}** — **$${o.basePrice.toFixed(2)}** (${o.merchantRating}⭐)`)
         .join('\n');
@@ -902,6 +1013,14 @@ ${itemsText}
       const results = await catalogService.searchProducts('burger', budget);
       state.lastPresentedOptions = results;
       await this.saveState(customer.id, state);
+
+      if (results.length === 0) {
+        return {
+          intent: 'SEARCH_RESULTS',
+          confidence: 0.90,
+          replyText: INTERACTIVE_NOT_FOUND_REPLY,
+        };
+      }
 
       const optionsText = results
         .slice(0, 3)
@@ -937,7 +1056,7 @@ You can ask me follow-up questions or tell me *"add the first one"*!`,
         return {
           intent: 'SEARCH_RESULTS',
           confidence: 0.90,
-          replyText: `Sorry, we couldn't find any crispy chicken meals within your $${budget} delivered budget in Saida. The nearest option is at Chicken House for $10.50 + $1.50 delivery ($12.00 total). Would you like to view it?`,
+          replyText: INTERACTIVE_NOT_FOUND_REPLY,
         };
       }
 
@@ -963,7 +1082,19 @@ You can ask me follow-up questions like *"which one is best rated?"* or simply t
     }
 
     // -------------------------------------------------------------
-    // 13. GENERAL / GREETING FALLBACK
+    // 13. UNDERSTANDABILITY / UNKNOWN CATALOG REQUEST
+    // -------------------------------------------------------------
+    const isGreeting = /^(hi|hello|hey|salam|marhaba|مرحبا|سلام)\b/i.test(lower);
+    if (!isGreeting) {
+      return {
+        intent: 'CLARIFICATION_REQUIRED',
+        confidence: 0.80,
+        replyText: "I didn't quite understand that. Could you clarify what you'd like, for example: search for a product, add an item, or check your cart?",
+      };
+    }
+
+    // -------------------------------------------------------------
+    // 14. GREETING
     // -------------------------------------------------------------
     return {
       intent: 'GENERAL_GREETING',

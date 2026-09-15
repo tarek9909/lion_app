@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { config } from '../../../config/env.js';
+import { config, resolveAIRoutingConfig } from '../../../config/env.js';
 import { AIProcessResult } from '../ai.types.js';
 import { geminiService } from '../gemini.service.js';
 import { aiTelemetryService } from '../telemetry/ai-telemetry.service.js';
@@ -22,10 +22,7 @@ export interface ProviderProcessOptions {
 
 export class ShadowCanaryRouter {
   private config: RoutingConfig = {
-    stableProvider: config.ai.stableProvider || (config.ai.provider === 'gemini' ? 'gemini' : 'smart_nlu'),
-    candidateProvider: config.ai.candidateProvider || 'gemini',
-    routingMode: config.ai.routingMode || (config.ai.provider === 'gemini' ? 'CANDIDATE_ONLY' : 'STABLE_ONLY'),
-    canaryPercentage: config.ai.canaryPercentage || 0,
+    ...resolveAIRoutingConfig(config.ai),
   };
 
   configure(newConfig: Partial<RoutingConfig>): void {
@@ -84,13 +81,16 @@ export class ShadowCanaryRouter {
     messageText: string,
     mediaType?: 'text' | 'image' | 'audio' | 'location',
     stableProcessor?: (p: string, m: string, media?: any, options?: ProviderProcessOptions) => Promise<AIProcessResult>,
-    options?: { requestId?: string }
+    options?: ProviderProcessOptions
   ): Promise<{ result: AIProcessResult; executionMode: 'LIVE' | 'CANARY'; shadowRan: boolean; requestId?: string }> {
-    const effectiveRoutingMode =
-      config.ai.provider === 'gemini' && this.config.routingMode === 'STABLE_ONLY'
-        ? 'CANDIDATE_ONLY'
-        : this.config.routingMode;
+    const effectiveRoutingMode = this.config.routingMode;
     const { candidateProvider, stableProvider } = this.config;
+    const requestId = options?.requestId || `req-${randomUUID()}`;
+    const providerOptions: ProviderProcessOptions = {
+      ...options,
+      requestId,
+      conversationId: options?.conversationId,
+    };
 
     // 1. CANARY MODE
     if (effectiveRoutingMode === 'CANARY' && this.isCanaryEligible(phone)) {
@@ -99,33 +99,33 @@ export class ShadowCanaryRouter {
         console.warn('[AI Router] Canary candidate (gemini) lacks valid credentials. Failing safe to stable provider.');
         const fallbackResult =
           stableProvider === 'gemini'
-            ? await geminiService.processCustomerMessage(phone, messageText, mediaType)
+            ? await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions)
             : stableProcessor
-            ? await stableProcessor(phone, messageText, mediaType)
-            : await geminiService.processCustomerMessage(phone, messageText, mediaType);
-        return { result: fallbackResult, executionMode: 'LIVE', shadowRan: false };
+            ? await stableProcessor(phone, messageText, mediaType, providerOptions)
+            : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
+        return { result: fallbackResult, executionMode: 'LIVE', shadowRan: false, requestId };
       }
 
       const result =
         candidateProvider === 'gemini'
-          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, { canary: true })
+          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, { ...providerOptions, canary: true })
           : stableProcessor
-          ? await stableProcessor(phone, messageText, mediaType)
-          : await geminiService.processCustomerMessage(phone, messageText, mediaType);
+          ? await stableProcessor(phone, messageText, mediaType, providerOptions)
+          : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
 
-      return { result, executionMode: 'CANARY', shadowRan: false };
+      return { result, executionMode: 'CANARY', shadowRan: false, requestId };
     }
 
     // 2. CANDIDATE ONLY MODE (Fails closed if candidate lacks credentials - G-062)
     if (effectiveRoutingMode === 'CANDIDATE_ONLY') {
       const result =
         candidateProvider === 'gemini'
-          ? await geminiService.processCustomerMessage(phone, messageText, mediaType)
+          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions)
           : stableProcessor
-          ? await stableProcessor(phone, messageText, mediaType)
-          : await geminiService.processCustomerMessage(phone, messageText, mediaType);
+          ? await stableProcessor(phone, messageText, mediaType, providerOptions)
+          : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
 
-      return { result, executionMode: 'LIVE', shadowRan: false };
+      return { result, executionMode: 'LIVE', shadowRan: false, requestId };
     }
 
 
@@ -133,30 +133,29 @@ export class ShadowCanaryRouter {
     if (effectiveRoutingMode === 'STABLE_ONLY' || !stableProcessor) {
       const result =
         stableProvider === 'gemini'
-          ? await geminiService.processCustomerMessage(phone, messageText, mediaType)
+          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions)
           : stableProcessor
-          ? await stableProcessor(phone, messageText, mediaType)
-          : await geminiService.processCustomerMessage(phone, messageText, mediaType);
+          ? await stableProcessor(phone, messageText, mediaType, providerOptions)
+          : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
 
-      return { result, executionMode: 'LIVE', shadowRan: false };
+      return { result, executionMode: 'LIVE', shadowRan: false, requestId };
     }
 
     // 4. SHADOW MODE
     // Step A: Run stable provider to serve the live customer immediately
     const liveResult =
       stableProvider === 'gemini'
-        ? await geminiService.processCustomerMessage(phone, messageText, mediaType)
-        : await stableProcessor(phone, messageText, mediaType);
+        ? await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions)
+        : await stableProcessor(phone, messageText, mediaType, providerOptions);
 
     // Step B: Run candidate in mutation-disabled shadow mode asynchronously
     let shadowRan = false;
-    const requestId = options?.requestId || `req-shadow-${randomUUID()}`;
     if (candidateProvider === 'gemini' && !this.hasCredentials('gemini')) {
       console.warn('[AI Router] Skipping shadow run: candidate (gemini) lacks credentials.');
     } else {
       try {
         shadowRan = true;
-        this.executeShadowAsync(phone, messageText, mediaType, liveResult, requestId).catch((err) => {
+        this.executeShadowAsync(phone, messageText, mediaType, liveResult, requestId, options?.conversationId).catch((err) => {
           console.warn('[AI Router] Shadow execution error:', err?.message || err);
         });
       } catch (err) {
@@ -177,7 +176,8 @@ export class ShadowCanaryRouter {
     messageText: string,
     mediaType: any,
     liveResult: AIProcessResult,
-    requestId: string
+    requestId: string,
+    conversationId?: number
   ): Promise<void> {
     const startTime = Date.now();
     try {
@@ -186,10 +186,26 @@ export class ShadowCanaryRouter {
         candidateResult = await geminiService.processCustomerMessage(phone, messageText, mediaType, {
           shadowMode: true,
           requestId,
+          conversationId,
         });
       }
 
       if (candidateResult) {
+        await aiTelemetryService.recordInteraction({
+          aiContext: 'CUSTOMER_WHATSAPP',
+          provider: 'shadow-router',
+          model: 'shadow-' + this.config.candidateProvider,
+          interactionType: 'CHAT_TURN',
+          rawInput: messageText,
+          rawOutput: candidateResult.replyText || '',
+          detectedIntent: candidateResult.intent,
+          latencyMs: Date.now() - startTime,
+          success: true,
+          executionMode: 'SHADOW',
+          requestId,
+          conversationId,
+        });
+
         const intentDisagreement = liveResult.intent !== candidateResult.intent;
         const actionDisagreement = liveResult.actionTaken !== candidateResult.actionTaken;
 
@@ -213,11 +229,28 @@ export class ShadowCanaryRouter {
             success: true,
             executionMode: 'SHADOW',
             requestId,
+            conversationId,
           });
         }
       }
     } catch (err: any) {
       console.warn('[AI Router] Shadow candidate execution failed:', err?.message || err);
+      await aiTelemetryService.recordInteraction({
+        aiContext: 'CUSTOMER_WHATSAPP',
+        provider: 'shadow-router',
+        model: 'shadow-' + this.config.candidateProvider,
+        interactionType: 'ERROR',
+        rawInput: messageText,
+        rawOutput: '',
+        detectedIntent: liveResult.intent,
+        latencyMs: Date.now() - startTime,
+        success: false,
+        errorCode: 'SHADOW_CANDIDATE_FAILED',
+        errorMessage: String(err?.message || err),
+        executionMode: 'SHADOW',
+        requestId,
+        conversationId,
+      });
     }
   }
 }

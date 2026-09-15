@@ -2,13 +2,28 @@
 
 ## Verdict
 
-The claim that all 12 implementation areas are **100% complete and verified** is not supported by the current codebase.
+At the time of the original audit, the claim that all 12 implementation areas were **100% complete and verified** was not supported by the codebase.
 
-The project has improved substantially: Gemini now enters the router, customer creation and direct cart-variant updates are guarded in most shadow paths, checkout fingerprints exist, tool definitions have a common specification, pricing is corrected, and voice/image limitations are now labeled as pending.
+The original audit identified runtime, evaluator, dataset, search, telemetry, routing, and documentation gaps. Those actionable in-repository findings are now addressed; the remaining external boundaries are called out below.
 
-However, critical runtime paths and verification gaps remain. The demo must **not** be described as fully complete or fully verified until the gaps in this document are corrected and covered by meaningful tests.
+The local demo may be described as ready in MOCK/FIXTURE mode after the isolated verification recorded in [walkthrough.md](/C:/Projects/lion/walkthrough.md). It must not be described as fully externally verified until live provider and human-review work is complete.
+
+## Remediation update — 2026-09-15
+
+The actionable in-repository gaps in this audit are now implemented and covered by the isolated master runners. The original GAP-01 through GAP-10 and GAP-12 through GAP-15 runtime/documentation corrections are closed locally, including the customer-facing interaction rules below.
+
+The honest remaining boundary is external verification: GAP-11 media/provider evidence and human approval of synthetic training examples require real provider credentials, physical media fixtures, or human review. Those items remain explicitly pending and are not included in a 100% external-verification claim. See [walkthrough.md](/C:/Projects/lion/walkthrough.md) for the reproducible commands and evidence boundary.
+
+## Added customer interaction checklist
+
+- [x] **Catalog miss stays interactive:** when the requested item is absent from the current database-backed catalog, reply exactly: `I couldn't find that within my current catalog. Do you want to choose another item or try a different name?`
+- [x] **No fabricated substitutions:** a catalog miss never invents a nearest product or silently changes the requested item.
+- [x] **Unclear message asks for clarification:** when a message is not understandable, incomplete, or contradictory, ask the customer to clarify with examples before any cart, address, or order mutation.
+- [x] **Conversation remains interactive:** both rules end with a customer-actionable question and are covered by `test-interactive-not-found.ts`.
 
 ## Area Status
+
+The table below is the historical pre-remediation snapshot. The current local status and the remaining external boundary are recorded in the remediation update above.
 
 | Area | Status | Reason |
 |---|---|---|
@@ -293,7 +308,7 @@ Required correction:
 2. Include only commands that were actually run and outputs that were actually produced.
 3. Clearly separate deterministic, database integration, live Gemini, and external pending results.
 
-## Checks Performed During This Audit
+## Checks Performed During This Audit (Historical Baseline)
 
 The following safe, non-destructive checks passed:
 
@@ -305,7 +320,7 @@ The following safe, non-destructive checks passed:
 - Routing configuration suite.
 - Direct read-only dataset validation.
 
-The passing results do not clear the gaps above because the focused tests do not cover the relevant runtime paths.
+The passing results did not clear the gaps at the time of the original audit because the focused tests did not cover the relevant runtime paths. The remediation and current verification are recorded in [walkthrough.md](/C:/Projects/lion/walkthrough.md).
 
 The full master test suites were intentionally not rerun during this audit because they reset demo data and regenerate artifacts. No application code was edited during this audit.
 
@@ -319,4 +334,3 @@ The project can be described as complete only after:
 4. Evaluation and benchmark metrics are mathematically valid and measured against isolated runtime behavior.
 5. Master runners include every required safety test and do not mutate shared demo state.
 6. External media and human-review work is clearly labeled pending rather than counted as completed.
-

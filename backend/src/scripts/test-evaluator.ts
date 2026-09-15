@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { modelEvaluator } from '../modules/ai/evaluation/evaluator.js';
 import { DatasetTurnRecord } from '../modules/ai/dataset/dataset-builder.js';
@@ -73,8 +74,9 @@ async function runEvaluatorSelfTest() {
   assert(m.sameLanguageResponseRate >= 0.98, 'Same-language response rate >= 98%');
 
   // Save report artifacts
-  const jsonPath = path.join(baseDir, 'eval_results.json');
-  const mdPath = path.join(baseDir, 'eval_summary.md');
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lion-eval-test-'));
+  const jsonPath = path.join(artifactDir, 'eval_results.json');
+  const mdPath = path.join(artifactDir, 'eval_summary.md');
 
   fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf8');
   fs.writeFileSync(mdPath, modelEvaluator.generateMarkdownReport(report), 'utf8');
@@ -97,6 +99,7 @@ async function runEvaluatorSelfTest() {
   }
 
   console.log('\n🏁 Model Evaluation Harness Suite: All Assertions Passed!\n');
+  fs.rmSync(artifactDir, { recursive: true, force: true });
 }
 
 runEvaluatorSelfTest()

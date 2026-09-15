@@ -50,15 +50,16 @@ async function runShadowCanaryTests() {
   assert(rShadow.shadowRan === true, 'Shadow candidate ran asynchronously');
   assert(rShadow.result.replyText.includes('Stable reply'), 'Customer received only the stable reply');
 
-  // Wait 150ms for async shadow telemetry
-  await new Promise((resolve) => setTimeout(resolve, 150));
-
-  const shadowLogs: any = await query(`
-    SELECT public_id, model_name, structured_output
-    FROM ai_interactions
-    WHERE model_name LIKE '%shadow%'
-    ORDER BY id DESC LIMIT 1
-  `);
+  let shadowLogs: any[] = [];
+  for (let attempt = 0; attempt < 20 && shadowLogs.length === 0; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    shadowLogs = (await query(`
+      SELECT public_id, model_name, structured_output
+      FROM ai_interactions
+      WHERE model_name LIKE '%shadow%'
+      ORDER BY id DESC LIMIT 1
+    `)) as any[];
+  }
   assert(shadowLogs.length > 0, 'Shadow execution telemetry logged to ai_interactions table');
 
   // 4. Rollback support

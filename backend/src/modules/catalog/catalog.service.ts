@@ -213,8 +213,20 @@ export class CatalogService {
 
     if (results.length === 0) return [];
 
+    // A product can appear more than once when joins expose multiple delivery
+    // zone rows. Keep the strongest catalog hit so duplicates cannot inflate
+    // result counts, ranking, or evaluator relevance metrics.
+    const strongestByMerchantProduct = new Map<number, SearchResult>();
+    for (const result of results) {
+      const existing = strongestByMerchantProduct.get(result.merchantProductId);
+      if (!existing || result.score > existing.score) {
+        strongestByMerchantProduct.set(result.merchantProductId, result);
+      }
+    }
+    const deduplicatedResults = [...strongestByMerchantProduct.values()];
+
     // If search specifically asks for "crispy", exclude non-crispy items
-    let candidateList = results;
+    let candidateList = deduplicatedResults;
     if (normalized.includes('crispy') || normalized.includes('كرسبي')) {
       const crispyOnly = results.filter(r =>
         r.productName.toLowerCase().includes('crispy') ||

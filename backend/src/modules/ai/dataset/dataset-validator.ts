@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
+import Ajv from 'ajv';
 import { CANONICAL_INTENTS, SUPPORTED_LANGUAGES, CLARIFICATION_TYPES } from '../contract/behavior.contract.js';
 
 export interface ValidationSummary {
@@ -50,6 +51,8 @@ const VoiceRecordSchema = z.object({
   detected_language: z.string().min(1),
   entities: z.record(z.any()),
   expected_downstream_tool: z.string().min(1),
+  provenance: z.enum(['SYNTHETIC_SEED', 'CUSTOMER_LOG', 'EDGE_CASE']),
+  human_review_status: z.enum(['SYNTHETIC_UNREVIEWED', 'HUMAN_APPROVED', 'REJECTED', 'PENDING']),
 });
 
 const ImageRecordSchema = z.object({
@@ -58,6 +61,8 @@ const ImageRecordSchema = z.object({
   candidate_queries: z.array(z.string().min(1)).min(1),
   confidence: z.number().min(0).max(1),
   needs_clarification: z.boolean(),
+  provenance: z.enum(['SYNTHETIC_SEED', 'CUSTOMER_LOG', 'EDGE_CASE']),
+  human_review_status: z.enum(['SYNTHETIC_UNREVIEWED', 'HUMAN_APPROVED', 'REJECTED', 'PENDING']),
 });
 
 const ManagementAiRecordSchema = z.object({
@@ -66,6 +71,8 @@ const ManagementAiRecordSchema = z.object({
   paraphrases: z.array(z.string().min(1)),
   canonical_metric: z.string().min(1),
   requires_read_only_fn: z.union([z.boolean(), z.string().min(1)]),
+  provenance: z.enum(['SYNTHETIC_SEED', 'CUSTOMER_LOG', 'EDGE_CASE']),
+  human_review_status: z.enum(['SYNTHETIC_UNREVIEWED', 'HUMAN_APPROVED', 'REJECTED', 'PENDING']),
 });
 
 export function validateDatasets(baseDir?: string): ValidationSummary {
@@ -89,6 +96,17 @@ export function validateDatasets(baseDir?: string): ValidationSummary {
 
   const convToSplits = new Map<string, Set<string>>();
   const custToSplits = new Map<string, Set<string>>();
+
+  // The checked-in JSON Schema is executable validation, not documentation.
+  const schemaPath = path.join(dir, 'schemas', 'turn-schema.json');
+  let validateTurnJson: ((record: unknown) => boolean) & { errors?: any[] };
+  if (!fs.existsSync(schemaPath)) {
+    summary.schemaErrors.push(`Dataset schema missing: ${schemaPath}`);
+    validateTurnJson = Object.assign(() => false, { errors: [{ message: 'schema missing' }] });
+  } else {
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    validateTurnJson = ajv.compile(JSON.parse(fs.readFileSync(schemaPath, 'utf8'))) as typeof validateTurnJson;
+  }
 
   // All 7 dataset files (Core Requirement 5)
   const allFiles = [
@@ -126,6 +144,22 @@ export function validateDatasets(baseDir?: string): ValidationSummary {
 
       summary.totalRecords++;
 
+      const metadata = z.object({
+        provenance: z.enum(['SYNTHETIC_SEED', 'CUSTOMER_LOG', 'EDGE_CASE']),
+        human_review_status: z.enum(['SYNTHETIC_UNREVIEWED', 'HUMAN_APPROVED', 'REJECTED', 'PENDING']),
+      }).safeParse(record);
+      if (!metadata.success) {
+        for (const issue of metadata.error.issues) {
+          summary.schemaErrors.push(`${filename}:${idx + 1}: ${issue.path.join('.') || 'root'}: ${issue.message}`);
+        }
+      }
+
+      if (record.provenance === 'SYNTHETIC_SEED' && record.human_review_status === 'HUMAN_APPROVED') {
+        summary.humanReviewIntegrityErrors.push(
+          `${filename}:${idx + 1}: Synthetic record falsely claims HUMAN_APPROVED status without human annotation.`
+        );
+      }
+
       // 1. Voice transcription file schema validation
       if (filename === 'voice_transcription.jsonl') {
         const parsed = VoiceRecordSchema.safeParse(record);
@@ -160,6 +194,11 @@ export function validateDatasets(baseDir?: string): ValidationSummary {
       }
 
       // 4. Turn record exhaustive schema validation (single_turn, multi_turn, clarification, safety)
+      if (!validateTurnJson(record)) {
+        for (const issue of validateTurnJson.errors || []) {
+          summary.schemaErrors.push(`${filename}:${idx + 1}: JSON Schema ${issue.instancePath || '/'}: ${issue.message}`);
+        }
+      }
       const parsed = TurnRecordSchema.safeParse(record);
       if (!parsed.success) {
         for (const issue of parsed.error.issues) {
@@ -171,13 +210,6 @@ export function validateDatasets(baseDir?: string): ValidationSummary {
       if (record.clarification_type && !CLARIFICATION_TYPES.includes(record.clarification_type)) {
         summary.schemaErrors.push(
           `${filename}:${idx + 1}: Unknown clarification type '${record.clarification_type}'`
-        );
-      }
-
-      // Audit review status integrity: synthetic records must not claim HUMAN_APPROVED
-      if (record.provenance === 'SYNTHETIC_SEED' && record.human_review_status === 'HUMAN_APPROVED') {
-        summary.humanReviewIntegrityErrors.push(
-          `${filename}:${idx + 1}: Synthetic record falsely claims HUMAN_APPROVED status without human annotation.`
         );
       }
 

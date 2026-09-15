@@ -21,7 +21,7 @@ async function getTableRowCount(table: string): Promise<number> {
   return Number(rows[0].count);
 }
 
-async function runShadowImmutabilityTests() {
+export async function runShadowImmutabilityTests() {
   console.log('\n🧪 Starting Area B: Shadow Mode Zero-Mutation Boundary Regression Tests...');
 
   // --- PART 1: Unregistered Customer Phone in Shadow Mode ---
@@ -89,7 +89,7 @@ async function runShadowImmutabilityTests() {
   // 1. Shadow add_to_cart
   const state: any = {
     customerId: customer.id,
-    stage: 'SEARCHING',
+    stage: 'AWAITING_CONFIRMATION',
     lastPresentedOptions: [
       {
         merchantProductId: 1,
@@ -138,6 +138,7 @@ async function runShadowImmutabilityTests() {
   assert(updateVarResult.result?.shadowExecution === true, 'Shadow update_cart_variant returned shadowExecution flag');
 
   // 4. Shadow confirm_and_create_order
+  state.stage = 'AWAITING_CONFIRMATION';
   state.awaitingConfirmation = true;
   state.selectedAddress = { id: 1, label: 'Home', formatted: 'Home' };
   const mockSummary = {
@@ -282,9 +283,11 @@ async function runShadowImmutabilityTests() {
   console.log('\n🏁 Area B: Shadow Mode Immutability Tests: All Assertions Passed!\n');
 }
 
-runShadowImmutabilityTests()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error('Fatal test error:', err);
-    process.exit(1);
-  });
+if (process.argv[1] && process.argv[1].endsWith('test-shadow-immutability.ts')) {
+  runShadowImmutabilityTests()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error('Fatal test error:', err);
+      process.exit(1);
+    });
+}

@@ -3,6 +3,8 @@ import { aiTelemetryService } from '../modules/ai/telemetry/ai-telemetry.service
 import { query } from '../database/db.js';
 import { calculateGeminiCost, DEFAULT_GEMINI_38_FLASH_PRICING } from '../modules/ai/telemetry/gemini-pricing.js';
 import { detectLanguage } from '../modules/ai/gemini.service.js';
+import { geminiService } from '../modules/ai/gemini.service.js';
+import { persistInboundMessage } from '../modules/conversations/conversation.persistence.js';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -219,6 +221,37 @@ async function runTelemetryRedactionTests() {
     structured.error_message.includes('503') && structured.error_message.includes('No capacity available'),
     'Failure row accurately captured API 503 error message in structured_output'
   );
+
+  // 13. End-to-end Gemini HTTP failure telemetry. The injected transport still
+  // exercises GeminiService's authoritative conversation/request correlation;
+  // no direct telemetry helper is used for this assertion.
+  const persisted = await persistInboundMessage('96170123456', 'bade a product that is unavailable', {
+    inboundType: 'TEXT',
+    providerMessageId: `telemetry-inbound-${Date.now()}`,
+  });
+  const upstreamRequestId = `req-gemini-503-${Date.now()}`;
+  geminiService.setFetchFn(async () => new Response('upstream unavailable', { status: 503 }));
+  try {
+    await geminiService.processCustomerMessage('96170123456', 'bade a product that is unavailable', 'text', {
+      conversationId: persisted.conversationId,
+      requestId: upstreamRequestId,
+    });
+  } catch (error: any) {
+    assert(String(error.message).includes('HTTP 503'), 'Gemini HTTP 503 is surfaced to the caller');
+  } finally {
+    geminiService.resetFetchFn();
+  }
+
+  const [geminiFailureRow]: any = await query(
+    `SELECT conversation_id, structured_output, success, error_code
+     FROM ai_interactions
+     WHERE JSON_UNQUOTE(JSON_EXTRACT(structured_output, '$.request_id')) = ?
+     ORDER BY id DESC LIMIT 1`,
+    [upstreamRequestId]
+  );
+  assert(geminiFailureRow?.conversation_id === persisted.conversationId, 'Gemini failure telemetry uses the persisted conversation ID');
+  assert(geminiFailureRow?.success === 0, 'Gemini HTTP failure telemetry records success = 0');
+  assert(geminiFailureRow?.error_code === 'GEMINI_HTTP_503', 'Gemini HTTP 503 telemetry records the authoritative error code');
 
   console.log('\n🏁 AI Telemetry & Redaction Tests: All Assertions Passed!\n');
 }

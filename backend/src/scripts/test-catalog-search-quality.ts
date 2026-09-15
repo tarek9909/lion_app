@@ -20,6 +20,7 @@ interface BenchmarkCase {
     | 'NO_RESULT_UNAVAILABLE';
   query: string;
   expectedRelevantProducts: string[];
+  basketItems?: { query: string; quantity: number }[];
   maxBudget?: number;
   preference?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value';
   expectZeroResults?: boolean;
@@ -177,12 +178,14 @@ async function runCatalogSearchQualityTests() {
       category: 'MULTI_ITEM_BASKET',
       query: 'milk and bread',
       expectedRelevantProducts: ['Fresh Milk 1L', 'White Sliced Bread'],
+      basketItems: [{ query: 'milk', quantity: 1 }, { query: 'bread', quantity: 1 }],
     },
     {
       id: 'bsk_02',
       category: 'MULTI_ITEM_BASKET',
-      query: 'burger and fries',
-      expectedRelevantProducts: ['Chicken Burger', 'Gourmet Beef Burger', 'French Fries'],
+      query: 'coke zero and milk',
+      expectedRelevantProducts: ['Coke Zero Can 330ml', 'Fresh Milk 1L'],
+      basketItems: [{ query: 'coke zero', quantity: 1 }, { query: 'milk', quantity: 1 }],
     },
 
     // 7. No-result / unavailable items (testing zero false positive rate)
@@ -215,8 +218,21 @@ async function runCatalogSearchQualityTests() {
   let sumMrr = 0;
   let correctNoResults = 0;
   let totalNoResultQueries = 0;
+  let totalBasketCases = 0;
 
   for (const tc of testCases) {
+    if (tc.category === 'MULTI_ITEM_BASKET') {
+      totalBasketCases++;
+      const comparisons = await catalogService.compareBasket(tc.basketItems || []);
+      const complete = comparisons.find((comparison) => comparison.isComplete);
+      assert(Boolean(complete), `${tc.id} returns a complete basket comparison`);
+      assert(
+        Boolean(complete && complete.completeItemsCount === (tc.basketItems || []).length),
+        `${tc.id} verifies every requested basket item is matched`
+      );
+      continue;
+    }
+
     const results = await catalogService.searchProducts(tc.query, {
       maxBudget: tc.maxBudget,
       preference: tc.preference,
@@ -230,6 +246,11 @@ async function runCatalogSearchQualityTests() {
       }
       continue;
     }
+
+    assert(
+      new Set(results.map((result) => result.merchantProductId)).size === results.length,
+      `${tc.id} does not return duplicate merchant catalog products`
+    );
 
     totalQueriesWithRelevant++;
     const expectedNormalized = tc.expectedRelevantProducts.map((p) => p.toLowerCase());
@@ -245,6 +266,7 @@ async function runCatalogSearchQualityTests() {
       let isRelevant = false;
 
       for (const exp of expectedNormalized) {
+        if (matchedExpectedInTop5.has(exp)) continue;
         if (resName.includes(exp) || exp.includes(resName)) {
           matchedExpectedInTop5.add(exp);
           isRelevant = true;
@@ -288,9 +310,11 @@ async function runCatalogSearchQualityTests() {
   console.log(`   - NDCG@5: ${ndcgAt5.toFixed(3)} (Target: >= 0.850)`);
   console.log(`   - MRR: ${mrr.toFixed(3)} (Target: >= 0.800)`);
   console.log(`   - No-Result Accuracy: ${(noResultAccuracy * 100).toFixed(1)}% (Target: 100.0%)`);
+  console.log(`   - Complete basket cases: ${totalBasketCases}/${testCases.filter((tc) => tc.category === 'MULTI_ITEM_BASKET').length}`);
 
   assert(recallAt5 >= 0.95, `True Recall@5 (${(recallAt5 * 100).toFixed(1)}%) >= 95% target`);
   assert(ndcgAt5 >= 0.85, `True NDCG@5 (${ndcgAt5.toFixed(3)}) >= 0.85 target`);
+  assert(ndcgAt5 <= 1.0, `True NDCG@5 (${ndcgAt5.toFixed(3)}) is bounded at 1.0`);
   assert(mrr >= 0.80, `MRR (${mrr.toFixed(3)}) >= 0.80 target`);
   assert(noResultAccuracy === 1.0, `No-Result Accuracy (${(noResultAccuracy * 100).toFixed(1)}%) is strictly 100%`);
 

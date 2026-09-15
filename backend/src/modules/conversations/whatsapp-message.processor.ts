@@ -204,7 +204,10 @@ export async function processInboundWhatsAppMessage(message: any, providerMessag
 
   const result: AIProcessResult = normalized.immediateReply
     ? { replyText: normalized.immediateReply, intent: 'GENERAL_GREETING', confidence: 0.99, actionTaken: undefined, orderCreated: undefined }
-    : await aiService.processCustomerMessage(normalized.phone, normalized.processedText, normalized.mediaType);
+    : await aiService.processCustomerMessage(normalized.phone, normalized.processedText, normalized.mediaType, {
+      conversationId: persisted.conversationId,
+      requestId: normalized.providerMessageId,
+    });
 
   if (result.intent === 'SUPPORT_REQUEST') {
     await setConversationAiMode(persisted.conversationId, 'HUMAN');

@@ -120,15 +120,22 @@ export async function simulateWhatsAppMessage(req: Request, res: Response) {
       return sendError(res, 'Message text is required');
     }
 
-    // Process with AI Engine
-    const result = await aiService.processCustomerMessage(userPhone, processedMessage, mediaType);
-
     const persisted = await persistInboundMessage(userPhone, processedMessage, {
       inboundType: mediaType,
       mediaUrl: audioUrl || imageUrl,
       transcript,
-      intent: result.intent,
     });
+
+    // Process against the exact conversation row just persisted. This keeps
+    // telemetry, Redis state, and the outbound message on one conversation.
+    const result = await aiService.processCustomerMessage(userPhone, processedMessage, mediaType, {
+      conversationId: persisted.conversationId,
+      requestId: `sim-${persisted.messageId}`,
+    });
+    await execute(
+      `UPDATE conversation_state SET last_intent = ? WHERE conversation_id = ?`,
+      [result.intent, persisted.conversationId]
+    ).catch(() => undefined);
 
     // Send outbound reply through provider client (G-016)
     await whatsappService.sendMessage(userPhone, result.replyText, 2, persisted.conversationId);

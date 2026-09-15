@@ -32,9 +32,13 @@
     "test:search-quality": "tsx src/scripts/test-catalog-search-quality.ts",
     "test:media-eval": "tsx src/scripts/test-media-evaluation.ts",
     "test:mgmt-ai": "tsx src/scripts/test-management-ai.ts",
-    "test:routing": "tsx src/scripts/test-shadow-canary.ts"
+    "test:routing": "tsx src/scripts/test-shadow-canary.ts",
+    "test:not-found": "tsx src/scripts/test-interactive-not-found.ts",
+    "test:shadow-immutability": "tsx src/scripts/test-shadow-immutability.ts",
+    "test:evaluator-safety": "tsx src/scripts/test-evaluator-safety.ts"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
