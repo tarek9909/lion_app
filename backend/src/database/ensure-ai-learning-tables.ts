@@ -8,18 +8,25 @@ export async function ensureAILearningTables(): Promise<void> {
   try {
     // 1. Ensure new columns in customer_preferences
     const alterColumns = [
-      `ALTER TABLE customer_preferences ADD COLUMN IF NOT EXISTS allow_ai_training TINYINT(1) NOT NULL DEFAULT 0;`,
-      `ALTER TABLE customer_preferences ADD COLUMN IF NOT EXISTS ai_training_consent_at TIMESTAMP(3) NULL;`,
-      `ALTER TABLE customer_preferences ADD COLUMN IF NOT EXISTS ai_training_consent_source VARCHAR(80) NULL;`,
-      `ALTER TABLE customer_preferences ADD COLUMN IF NOT EXISTS delivery_landmarks JSON NULL;`,
-      `ALTER TABLE customer_preferences ADD COLUMN IF NOT EXISTS special_instructions JSON NULL;`,
-      `ALTER TABLE customer_preferences ADD COLUMN IF NOT EXISTS memory_items_json JSON NULL;`,
+      `ALTER TABLE customer_preferences ADD COLUMN allow_ai_training TINYINT(1) NOT NULL DEFAULT 0;`,
+      `ALTER TABLE customer_preferences ADD COLUMN ai_training_consent_at TIMESTAMP(3) NULL;`,
+      `ALTER TABLE customer_preferences ADD COLUMN ai_training_consent_source VARCHAR(80) NULL;`,
+      `ALTER TABLE customer_preferences ADD COLUMN delivery_landmarks JSON NULL;`,
+      `ALTER TABLE customer_preferences ADD COLUMN special_instructions JSON NULL;`,
+      `ALTER TABLE customer_preferences ADD COLUMN memory_items_json JSON NULL;`,
     ];
 
     for (const sql of alterColumns) {
       try {
         await execute(sql);
-      } catch {}
+      } catch (err: any) {
+        // MariaDB 10.4 does not support ADD COLUMN IF NOT EXISTS.
+        // Duplicate columns are expected on an already-migrated database;
+        // every other error must reach the strict production guard below.
+        if (err?.errno !== 1060 && err?.code !== 'ER_DUP_FIELDNAME') {
+          throw err;
+        }
+      }
     }
 
     // 2. Training curation queue (sanitized text ONLY, no raw PII)
