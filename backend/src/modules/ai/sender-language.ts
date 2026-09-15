@@ -23,7 +23,8 @@ const LANGUAGE_PROFILES: LanguageProfile[] = [
     words: [
       'bade', 'baddi', 'badde', 'baddak', 'baddik', 'zid', 'zidli', 'sawiya', 'sawiyon',
       'wehde', 'wahad', 'we7de', 'tnein', 'tlete', 'kifak', 'kifik', 'shou', 'chou',
-      'wein', 'wen', '3al', '3albet', '3andon', 'hal', 'shi', '7elo', 'akid', 'akeed',
+      'shu', 'wein', 'wen', '3al', '3albet', '3andon', '3andak', '3ndak', '3ndk', '3tene',
+      'hal', 'shi', 'kaza', 'menu', 'menus', 'options', '7elo', 'akid', 'akeed',
       'ta2kid', 'tamam', 'kabbis', 'ma2liyeh', 'mosa3adeh', 'arkhas', 'a7san', 'la2ayt',
       'fini', 'bse3dak', 'tfaddal', 'merci', 'mar7aba', 'salam', 'ma', 'mesh', 'mish',
     ],
@@ -133,7 +134,7 @@ function profileScore(text: string, profile: LanguageProfile): number {
 
 function arabiziScore(text: string): number {
   const normalized = normalize(text);
-  const strongWords = /\b(?:bade|baddi|badde|baddak|baddik|zidli|sawiya|sawiyon|kifak|kifik|shou|chou|wein|wen|3al|3albet|3andon|akid|akeed|ta2kid|ya3tik|ma2liyeh|mosa3adeh|a7san|arkhas|kabbis|mar7aba|tfaddal|bse3dak)\b/g;
+  const strongWords = /\b(?:bade|baddi|badde|baddak|baddik|zidli|sawiya|sawiyon|kifak|kifik|shou|shu|chou|wein|wen|3al|3albet|3andon|3andak|3ndak|3ndk|3tene|kaza|akid|akeed|ta2kid|ya3tik|ma2liyeh|mosa3adeh|a7san|arkhas|kabbis|mar7aba|tfaddal|bse3dak)\b/g;
   const encodedWords = /\b[a-z]*[2356789][a-z]+\b/g;
   const strongMatches = normalized.match(strongWords)?.length || 0;
   const encodedMatches = normalized.match(encodedWords)?.length || 0;
@@ -237,38 +238,46 @@ export function getLanguageSafeFallback(language: SenderLanguage): string {
   switch (language) {
     case 'ar':
     case 'ar_lb':
-      return 'فيني ساعدك بطلبك. شو بتحب تفتّش، تضيف، أو تتأكد منه؟';
+      return 'ما فهمت رسالتك بعد. بدك تطلب أكل، تشوف المنيو، تضيف صنف، تشوف السلة، أو تتابع طلب؟ مثلاً اكتب: «فرجيني المنيو» أو «بدي برغر».';
     case 'arabizi':
-      return 'Fini se3dak bi talabak. Shou baddak tfattesh, tzid, aw tet2akkad meno?';
+      return 'Ma fhemet 3layk. Baddak tetlob akel, tshouf l menu, tzid item, tshouf l cart, aw tetba3 talab? Fik t2elle: “warjine l menus” aw “bade burger”.';
     case 'mixed':
-      return 'فيني ساعدك بطلبك. What would you like to search, add, or check?';
+      return 'ما فهمت رسالتك بعد. Do you want to order food, see the menu, add an item, check your cart, or track an order?';
     case 'fr':
-      return 'Je peux vous aider avec votre commande. Que souhaitez-vous rechercher, ajouter ou vérifier ?';
+      return "Je n'ai pas compris. Voulez-vous commander, voir le menu, ajouter un article, consulter le panier ou suivre une commande ?";
     case 'es':
-      return 'Puedo ayudarte con tu pedido. ¿Qué quieres buscar, añadir o comprobar?';
+      return 'No he entendido. ¿Quieres pedir comida, ver el menú, añadir un artículo, consultar el carrito o seguir un pedido?';
     case 'de':
-      return 'Ich helfe dir gerne bei deiner Bestellung. Was möchtest du suchen, hinzufügen oder prüfen?';
+      return 'Ich habe das nicht verstanden. Möchtest du Essen bestellen, die Speisekarte sehen, etwas hinzufügen, den Warenkorb prüfen oder eine Bestellung verfolgen?';
     case 'it':
-      return 'Posso aiutarti con il tuo ordine. Cosa vuoi cercare, aggiungere o verificare?';
+      return 'Non ho capito. Vuoi ordinare del cibo, vedere il menu, aggiungere un articolo, controllare il carrello o seguire un ordine?';
     case 'pt':
-      return 'Posso ajudar com o seu pedido. O que você quer buscar, adicionar ou verificar?';
+      return 'Não entendi. Você quer pedir comida, ver o menu, adicionar um item, consultar o carrinho ou acompanhar um pedido?';
     case 'tr':
-      return 'Siparişinize yardımcı olabilirim. Ne aramak, eklemek veya kontrol etmek istersiniz?';
+      return 'Bunu anlamadım. Yemek siparişi vermek, menüyü görmek, ürün eklemek, sepeti kontrol etmek veya siparişi takip etmek mi istiyorsunuz?';
     case 'ru':
-      return 'Я помогу с вашим заказом. Что найти, добавить или проверить?';
+      return 'Я не понял сообщение. Вы хотите заказать еду, посмотреть меню, добавить блюдо, проверить корзину или отследить заказ?';
     case 'he':
-      return 'אני יכול לעזור בהזמנה שלך. מה לחפש, להוסיף או לבדוק?';
+      return 'לא הבנתי. האם תרצו להזמין אוכל, לראות את התפריט, להוסיף פריט, לבדוק את הסל או לעקוב אחרי הזמנה?';
     case 'hi':
-      return 'मैं आपके ऑर्डर में मदद कर सकता हूँ। आप क्या खोजना, जोड़ना या जाँचना चाहते हैं?';
+      return 'मैं समझ नहीं पाया। क्या आप खाना ऑर्डर करना, मेनू देखना, कोई आइटम जोड़ना, कार्ट देखना या ऑर्डर ट्रैक करना चाहते हैं?';
     case 'zh':
-      return '我可以帮您处理订单。您想搜索、添加或查看什么？';
+      return '我没有理解您的消息。您想点餐、查看菜单、添加商品、查看购物车，还是跟踪订单？';
     case 'ja':
-      return 'ご注文をお手伝いします。何を検索、追加、確認しますか？';
+      return 'メッセージを理解できませんでした。料理を注文、メニューを見る、商品を追加、カートを確認、または注文を追跡しますか？';
     case 'ko':
-      return '주문을 도와드릴게요. 무엇을 검색하거나 추가하거나 확인할까요?';
+      return '메시지를 이해하지 못했어요. 음식을 주문하거나, 메뉴를 보거나, 상품을 추가하거나, 장바구니 또는 주문을 확인할까요?';
     case 'th':
-      return 'ฉันช่วยจัดการคำสั่งซื้อของคุณได้ คุณต้องการค้นหา เพิ่ม หรือตรวจสอบอะไร?';
+      return 'ฉันไม่เข้าใจข้อความ คุณต้องการสั่งอาหาร ดูเมนู เพิ่มสินค้า ตรวจสอบตะกร้า หรือติดตามคำสั่งซื้อใช่ไหม?';
     default:
-      return 'I can help with your order. What would you like to search for, add, or check?';
+      return 'I did not understand that yet. Do you want to order food, see the menu, add an item, check your cart, or track an order? For example, say “show me burgers” or “give me menus”.';
   }
+}
+
+/** Detects the repetitive generic answer that must be replaced by a real clarification. */
+export function isGenericAssistanceReply(reply: string): boolean {
+  const normalized = normalize(reply).replace(/[.!?,]+/g, '').replace(/\s+/g, ' ');
+  return normalized.startsWith('i can help with your order what would you like to search for add or check')
+    || normalized.startsWith('fini se3dak bi talabak shou baddak tfattesh tzid aw tet2akkad meno')
+    || normalized.startsWith('فيني ساعدك بطلبك شو بتحب تفتش تضيف أو تتأكد منه');
 }

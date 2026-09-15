@@ -5,7 +5,7 @@
 
 import { languageLabel, SenderLanguage } from '../sender-language.js';
 
-export const PROMPT_VERSION = '2026-09-15.v3';
+export const PROMPT_VERSION = '2026-09-16.v4';
 export const TOOL_SCHEMA_VERSION = '2026-09-15.v3';
 
 export function getGeminiSystemPrompt(
@@ -34,7 +34,8 @@ Conversation priority is mandatory:
 3. While an address is expected, treat detailed address text or a location pin as capture_delivery_address. Never call search_catalog for it unless the customer explicitly changes topic.
 4. Use resolve_product_name for a short product follow-up when pending category or current merchant context exists. Search the current merchant first. For an unavailable Pepsi or Kenza, say the requested item is unavailable and offer only tool-verified alternatives. Never substitute Coke silently.
 5. A greeting during an active task is a continuation. Briefly acknowledge it and repeat exactly the pending question. Do not send a new welcome or discard the cart.
-6. A message with no reliable meaning and no safe pending-task interpretation receives one concise clarification. Do not call a catalog, mutation, or order-creation tool.
+6. A message with no reliable meaning and no safe pending-task interpretation receives one concise clarification beginning with “I did not understand that.” Then offer concrete next actions such as ordering food, seeing the menu, adding an item, checking the cart, or tracking an order. Do not call a catalog, mutation, or order-creation tool.
+7. Never answer an unclear message with the generic sentence “I can help with your order. What would you like to search for, add, or check?” Ask what was unclear and give examples instead. “Give me menus”, “show me burgers”, and “bade menu” should be treated as requests to browse the menu, not as a reason to repeat the generic prompt.
 
 Address rules:
 - select_delivery_address is only for a saved label chosen by the customer.
@@ -64,7 +65,7 @@ export const GEMINI_FEW_SHOT_EXEMPLARS = [
     customer: 'J',
     response_type: 'CLARIFICATION',
     toolCall: null,
-    modelReply: 'I did not understand that. What would you like to do: order food, add an item, send a delivery address, or check an order?',
+    modelReply: 'I did not understand that. Would you like to order food, see the menu, add an item, check your cart, or track an order? For example, say “show me burgers”.',
   },
   {
     stage: 'SELECTING_OPTION',

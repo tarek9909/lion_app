@@ -1,6 +1,7 @@
 import {
   detectSenderLanguage,
   getLanguageSafeFallback,
+  isGenericAssistanceReply,
   isResponseInSenderLanguage,
 } from '../modules/ai/sender-language.js';
 import { localizeReplyText } from '../modules/ai/response-localizer.js';
@@ -45,6 +46,10 @@ export function runLanguageConsistencyTests(): void {
   assert(detected[2] === 'arabizi', 'Arabizi is detected as arabizi');
   assert(detected[3] === 'mixed', 'Code-switched Arabic/English is detected as mixed');
   assert(detected[4] === 'fr', 'French is detected as fr');
+  assert(detectSenderLanguage('Yes, 3tene kaza menu') === 'arabizi', 'Arabizi menu request is detected as arabizi');
+  assert(getLanguageSafeFallback('en').startsWith('I did not understand'), 'English fallback explicitly acknowledges uncertainty');
+  assert(getLanguageSafeFallback('arabizi').startsWith('Ma fhemet'), 'Arabizi fallback explicitly acknowledges uncertainty');
+  assert(isGenericAssistanceReply('I can help with your order. What would you like to search for, add, or check?'), 'generic assistance reply is detected');
 
   for (const language of ['ar', 'arabizi', 'fr'] as const) {
     const clarification = localizeReplyText(CLARIFICATION_REPLY, language);

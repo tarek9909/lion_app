@@ -30,6 +30,7 @@ import { dispatchCustomerError, getCustomerResponseCategory, resultHasNoCatalogM
 import {
   detectSenderLanguage,
   getLanguageSafeFallback,
+  isGenericAssistanceReply,
   isResponseInSenderLanguage,
   SenderLanguage,
 } from './sender-language.js';
@@ -672,6 +673,14 @@ export class GeminiService {
       // English. Product names, merchant names, IDs, prices, and markup stay
       // untouched.
       finalText = localizeReplyText(finalText, responseLanguage);
+    }
+
+    // Gemini sometimes falls back to the old generic menu prompt even when it
+    // did not understand the customer. Make uncertainty explicit and offer
+    // useful next actions instead of repeating that same dead-end question.
+    if (isGenericAssistanceReply(finalText)) {
+      finalText = getLanguageSafeFallback(responseLanguage);
+      primaryIntent = 'CLARIFICATION';
     }
 
     // The prompt is the primary language control. This backend boundary keeps
