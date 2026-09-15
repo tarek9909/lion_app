@@ -13,7 +13,10 @@ export const BEHAVIOR_CONTRACT_VERSION = '1.0.0';
 // -----------------------------------------------------------------------------
 export const CANONICAL_INTENTS = [
   'GREETING',
+  'CLARIFICATION',
+  'CONTINUE_PENDING_TASK',
   'SEARCH_PRODUCTS',
+  'RESOLVE_PRODUCT_NAME',
   'COMPARE_RESULTS',
   'COMPARE_BASKET',
   'SELECT_RESULT',
@@ -25,8 +28,12 @@ export const CANONICAL_INTENTS = [
   'UPDATE_VARIANT',
   'ADD_ITEM_NOTE',
   'SELECT_ADDRESS',
+  'CAPTURE_DELIVERY_ADDRESS',
   'CHECKOUT_PREVIEW',
   'CONFIRM_ORDER',
+  'CREATE_MULTI_ORDER_PLAN',
+  'REVIEW_MULTI_ORDER_PLAN',
+  'CONFIRM_ORDER_BATCH',
   'ORDER_STATUS',
   'CONTACT_SUPPORT',
   'UNKNOWN',
@@ -65,6 +72,26 @@ export type LegacyIntent =
   | 'SUPPORT_REQUEST'
   | 'HUMAN_HANDOFF'
   | 'UNKNOWN';
+
+/**
+ * Gemini selects one customer-visible response category before composing text.
+ * The backend verifies it against the current stage and controlled tool result.
+ */
+export const CUSTOMER_RESPONSE_TYPES = [
+  'CLARIFICATION',
+  'PRODUCT_MISS',
+  'CART_ITEM_MISS',
+  'VARIANT_MISS',
+  'ADDRESS_MISS',
+  'ADDRESS_VALIDATION',
+  'NO_ACTIVE_ORDER',
+  'ORDER_NUMBER_MISS',
+  'CHECKOUT_SUMMARY',
+  'MULTI_ORDER_PLAN',
+  'NORMAL',
+] as const;
+
+export type CustomerResponseType = (typeof CUSTOMER_RESPONSE_TYPES)[number];
 
 const LEGACY_TO_CANONICAL_MAP: Record<LegacyIntent, CanonicalIntent> = {
   GREETING: 'GREETING',
@@ -109,6 +136,9 @@ export function toLegacyIntent(canonical: CanonicalIntent): LegacyIntent {
   switch (canonical) {
     case 'GREETING':
       return 'GREETING';
+    case 'CLARIFICATION':
+    case 'CONTINUE_PENDING_TASK':
+      return 'CLARIFICATION_REQUIRED';
     case 'SEARCH_PRODUCTS':
       return 'SEARCH_RESULTS';
     case 'COMPARE_RESULTS':
@@ -132,11 +162,18 @@ export function toLegacyIntent(canonical: CanonicalIntent): LegacyIntent {
     case 'ADD_ITEM_NOTE':
       return 'PRODUCT_MODIFICATION';
     case 'SELECT_ADDRESS':
+    case 'CAPTURE_DELIVERY_ADDRESS':
       return 'ADDRESS_SELECTED';
     case 'CHECKOUT_PREVIEW':
       return 'CHECKOUT_PREVIEW';
     case 'CONFIRM_ORDER':
+    case 'CONFIRM_ORDER_BATCH':
       return 'ORDER_CONFIRMED';
+    case 'CREATE_MULTI_ORDER_PLAN':
+    case 'REVIEW_MULTI_ORDER_PLAN':
+      return 'CLARIFICATION_REQUIRED';
+    case 'RESOLVE_PRODUCT_NAME':
+      return 'SEARCH_RESULTS';
     case 'ORDER_STATUS':
       return 'ORDER_STATUS';
     case 'CONTACT_SUPPORT':
@@ -187,7 +224,9 @@ export const CONVERSATION_STAGES = [
   'AWAITING_CLARIFICATION',
   'AWAITING_MERCHANT_SWITCH',
   'SELECTING_ADDRESS',
+  'ADDRESS_DRAFT_REVIEW',
   'AWAITING_CONFIRMATION',
+  'MULTI_ORDER_REVIEW',
   'ORDER_PLACED',
   'TRACKING_ORDER',
   'HUMAN_SUPPORT',
@@ -214,11 +253,13 @@ export type ClarificationType = (typeof CLARIFICATION_TYPES)[number];
 // -----------------------------------------------------------------------------
 export const READ_ONLY_TOOLS = [
   'search_catalog',
+  'resolve_product_name',
   'compare_supermarket_basket',
   'get_active_cart',
   'list_saved_addresses',
   'get_customer_addresses',
   'get_order_status',
+  'review_multi_order_plan',
   'request_human_support',
   'switch_merchant_reject',
 ] as const;
@@ -231,7 +272,12 @@ export const MUTATING_TOOLS = [
   'remove_cart_item',
   'clear_cart',
   'select_delivery_address',
+  'capture_delivery_address',
   'confirm_and_create_order',
+  'create_multi_order_plan',
+  'set_batch_delivery_address',
+  'confirm_order_batch',
+  'cancel_order_batch_child',
   'switch_merchant_confirm',
 ] as const;
 
@@ -245,6 +291,7 @@ export function isMutatingTool(toolName: string): boolean {
 
 export const TOOL_INTENT_MAP: Record<ControlledTool, CanonicalIntent> = {
   search_catalog: 'SEARCH_PRODUCTS',
+  resolve_product_name: 'RESOLVE_PRODUCT_NAME',
   compare_supermarket_basket: 'COMPARE_BASKET',
   get_active_cart: 'VIEW_CART',
   add_to_cart: 'ADD_TO_CART',
@@ -256,7 +303,13 @@ export const TOOL_INTENT_MAP: Record<ControlledTool, CanonicalIntent> = {
   list_saved_addresses: 'SELECT_ADDRESS',
   get_customer_addresses: 'SELECT_ADDRESS',
   select_delivery_address: 'SELECT_ADDRESS',
+  capture_delivery_address: 'CAPTURE_DELIVERY_ADDRESS',
   confirm_and_create_order: 'CONFIRM_ORDER',
+  create_multi_order_plan: 'CREATE_MULTI_ORDER_PLAN',
+  review_multi_order_plan: 'REVIEW_MULTI_ORDER_PLAN',
+  set_batch_delivery_address: 'SELECT_ADDRESS',
+  confirm_order_batch: 'CONFIRM_ORDER_BATCH',
+  cancel_order_batch_child: 'REVIEW_MULTI_ORDER_PLAN',
   get_order_status: 'ORDER_STATUS',
   request_human_support: 'CONTACT_SUPPORT',
   switch_merchant_confirm: 'ADD_TO_CART',
@@ -273,14 +326,16 @@ export interface StateTransitionRule {
 }
 
 export const STATE_TRANSITIONS: Record<ConversationStage, ConversationStage[]> = {
-  IDLE: ['SEARCHING', 'SELECTING_OPTION', 'EDITING_CART', 'SELECTING_ADDRESS', 'TRACKING_ORDER', 'HUMAN_SUPPORT'],
+  IDLE: ['SEARCHING', 'SELECTING_OPTION', 'EDITING_CART', 'SELECTING_ADDRESS', 'TRACKING_ORDER', 'HUMAN_SUPPORT', 'MULTI_ORDER_REVIEW'],
   SEARCHING: ['IDLE', 'SELECTING_OPTION', 'EDITING_CART', 'AWAITING_CLARIFICATION', 'TRACKING_ORDER', 'HUMAN_SUPPORT'],
-  SELECTING_OPTION: ['SEARCHING', 'EDITING_CART', 'AWAITING_MERCHANT_SWITCH', 'AWAITING_CLARIFICATION', 'SELECTING_ADDRESS', 'AWAITING_CONFIRMATION', 'HUMAN_SUPPORT'],
-  EDITING_CART: ['SEARCHING', 'SELECTING_OPTION', 'EDITING_CART', 'AWAITING_CLARIFICATION', 'AWAITING_MERCHANT_SWITCH', 'SELECTING_ADDRESS', 'AWAITING_CONFIRMATION', 'TRACKING_ORDER', 'IDLE', 'HUMAN_SUPPORT'],
+  SELECTING_OPTION: ['SEARCHING', 'EDITING_CART', 'AWAITING_MERCHANT_SWITCH', 'AWAITING_CLARIFICATION', 'SELECTING_ADDRESS', 'AWAITING_CONFIRMATION', 'HUMAN_SUPPORT', 'MULTI_ORDER_REVIEW'],
+  EDITING_CART: ['SEARCHING', 'SELECTING_OPTION', 'EDITING_CART', 'AWAITING_CLARIFICATION', 'AWAITING_MERCHANT_SWITCH', 'SELECTING_ADDRESS', 'AWAITING_CONFIRMATION', 'TRACKING_ORDER', 'IDLE', 'HUMAN_SUPPORT', 'MULTI_ORDER_REVIEW'],
   AWAITING_CLARIFICATION: ['EDITING_CART', 'SELECTING_ADDRESS', 'AWAITING_CONFIRMATION', 'SEARCHING', 'HUMAN_SUPPORT'],
   AWAITING_MERCHANT_SWITCH: ['EDITING_CART', 'IDLE', 'SEARCHING', 'HUMAN_SUPPORT'],
-  SELECTING_ADDRESS: ['EDITING_CART', 'AWAITING_CONFIRMATION', 'SEARCHING', 'HUMAN_SUPPORT'],
-  AWAITING_CONFIRMATION: ['ORDER_PLACED', 'SELECTING_ADDRESS', 'EDITING_CART', 'SEARCHING', 'IDLE', 'TRACKING_ORDER', 'HUMAN_SUPPORT'],
+  SELECTING_ADDRESS: ['EDITING_CART', 'ADDRESS_DRAFT_REVIEW', 'AWAITING_CONFIRMATION', 'SEARCHING', 'HUMAN_SUPPORT', 'MULTI_ORDER_REVIEW'],
+  ADDRESS_DRAFT_REVIEW: ['SELECTING_ADDRESS', 'AWAITING_CONFIRMATION', 'MULTI_ORDER_REVIEW', 'EDITING_CART', 'HUMAN_SUPPORT'],
+  AWAITING_CONFIRMATION: ['ORDER_PLACED', 'SELECTING_ADDRESS', 'EDITING_CART', 'SEARCHING', 'IDLE', 'TRACKING_ORDER', 'HUMAN_SUPPORT', 'MULTI_ORDER_REVIEW'],
+  MULTI_ORDER_REVIEW: ['SELECTING_ADDRESS', 'ADDRESS_DRAFT_REVIEW', 'AWAITING_CONFIRMATION', 'ORDER_PLACED', 'EDITING_CART', 'IDLE', 'TRACKING_ORDER', 'HUMAN_SUPPORT', 'MULTI_ORDER_REVIEW'],
   ORDER_PLACED: ['TRACKING_ORDER', 'IDLE', 'SEARCHING', 'HUMAN_SUPPORT'],
   TRACKING_ORDER: ['IDLE', 'SEARCHING', 'EDITING_CART', 'TRACKING_ORDER', 'HUMAN_SUPPORT'],
   HUMAN_SUPPORT: ['IDLE', 'SEARCHING', 'EDITING_CART', 'HUMAN_SUPPORT'],
@@ -290,6 +345,37 @@ export function isAllowedTransition(from: ConversationStage, to: ConversationSta
   if (from === to) return true;
   const allowed = STATE_TRANSITIONS[from];
   return allowed ? allowed.includes(to) : false;
+}
+
+/**
+ * Server-side guard for Gemini function calls. This is an orchestration/safety
+ * constraint, not a second NLU: when a verified pending task owns the turn,
+ * unrelated catalog mutations cannot run until that task is explicitly left.
+ */
+export function isToolAllowedAtStage(stage: ConversationStage, toolName: string): boolean {
+  if (stage === 'SELECTING_ADDRESS' || stage === 'ADDRESS_DRAFT_REVIEW') {
+    return [
+      'list_saved_addresses',
+      'get_customer_addresses',
+      'select_delivery_address',
+      'capture_delivery_address',
+      'get_order_status',
+      'request_human_support',
+    ].includes(toolName);
+  }
+  if (stage === 'MULTI_ORDER_REVIEW') {
+    return [
+      'review_multi_order_plan',
+      'set_batch_delivery_address',
+      'capture_delivery_address',
+      'select_delivery_address',
+      'confirm_order_batch',
+      'cancel_order_batch_child',
+      'get_order_status',
+      'request_human_support',
+    ].includes(toolName);
+  }
+  return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -332,6 +418,7 @@ export function getBehaviorContractSchema() {
   return {
     version: BEHAVIOR_CONTRACT_VERSION,
     canonicalIntents: CANONICAL_INTENTS,
+    customerResponseTypes: CUSTOMER_RESPONSE_TYPES,
     supportedLanguages: SUPPORTED_LANGUAGES,
     conversationStages: CONVERSATION_STAGES,
     clarificationTypes: CLARIFICATION_TYPES,

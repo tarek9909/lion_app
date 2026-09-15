@@ -8,6 +8,7 @@ import { createIsolatedDatabase, dropIsolatedDatabase, isolatedRedisUrl } from '
 
 const suites = [
   { name: 'Phase 1: Behavior Contract & Tool Schemas', script: 'src/scripts/test-behavior-contract.ts' },
+  { name: 'P0/P1: Customer Conversation Acceptance', script: 'src/scripts/test-conversations.ts' },
   { name: 'Phase 3: AI Telemetry & PII Redaction', script: 'src/scripts/test-telemetry-redaction.ts' },
   { name: 'Phase 4: Dataset Pipeline & Zero-Leakage Splits', script: 'src/scripts/test-dataset-validation.ts' },
   { name: 'Phase 5: Real-Model Evaluation Harness (CI Mode)', script: 'src/scripts/test-evaluator.ts' },

@@ -154,6 +154,12 @@ CREATE TABLE customer_preferences (
     allow_promotions TINYINT(1) NOT NULL DEFAULT 1,
     allow_driver_call TINYINT(1) NOT NULL DEFAULT 1,
     allow_call_recording TINYINT(1) NOT NULL DEFAULT 0,
+    allow_ai_training TINYINT(1) NOT NULL DEFAULT 0,
+    ai_training_consent_at TIMESTAMP(3) NULL,
+    ai_training_consent_source VARCHAR(80) NULL,
+    delivery_landmarks JSON NULL,
+    special_instructions JSON NULL,
+    memory_items_json JSON NULL,
     updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (customer_id),
     CONSTRAINT fk_customer_preferences_customer FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
@@ -854,6 +860,39 @@ CREATE TABLE ai_interactions (
     KEY idx_ai_interactions_context (ai_context, created_at),
     CONSTRAINT fk_ai_interactions_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
     CONSTRAINT fk_ai_interactions_user FOREIGN KEY (dashboard_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE training_curation_queue (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    conversation_id BIGINT UNSIGNED NULL,
+    customer_id BIGINT UNSIGNED NULL,
+    turn_index INT UNSIGNED NOT NULL DEFAULT 1,
+    correlation_id VARCHAR(100) NULL,
+    inbound_message_id BIGINT UNSIGNED NULL,
+    assistant_message_id BIGINT UNSIGNED NULL,
+    dataset_version VARCHAR(40) NULL,
+    sender_language VARCHAR(20) NOT NULL DEFAULT 'en',
+    sanitized_user_message TEXT NOT NULL,
+    sanitized_model_response TEXT NOT NULL,
+    detected_intent VARCHAR(60) NOT NULL DEFAULT 'UNKNOWN',
+    tool_calls_json JSON NULL,
+    quality_score INT NOT NULL DEFAULT 0,
+    conversion_status VARCHAR(40) NOT NULL DEFAULT 'NOT_CONVERTED',
+    review_status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+    reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_at TIMESTAMP(3) NULL,
+    review_notes VARCHAR(500) NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_training_curation_public_id (public_id),
+    UNIQUE KEY uq_training_curation_turn (conversation_id, turn_index, correlation_id),
+    KEY idx_training_curation_status (review_status, quality_score),
+    KEY idx_training_curation_conv (conversation_id),
+    CONSTRAINT fk_training_curation_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
+    CONSTRAINT fk_training_curation_customer FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
+    CONSTRAINT fk_training_curation_reviewer FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE search_sessions (
@@ -2507,6 +2546,94 @@ ON DUPLICATE KEY UPDATE
     setting_value = VALUES(setting_value),
     setting_group = VALUES(setting_group),
     description = VALUES(description);
+
+-- =====================================================================
+-- 18. CONVERSATION DRAFTS AND MULTI-MERCHANT ORDER BATCHES
+-- =====================================================================
+
+CREATE TABLE conversation_address_drafts (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    inbound_message_id BIGINT UNSIGNED NULL,
+    raw_address TEXT NULL,
+    safe_summary VARCHAR(500) NULL,
+    area_name VARCHAR(160) NULL,
+    validation_status VARCHAR(30) NOT NULL DEFAULT 'DRAFT',
+    delivery_zone_id BIGINT UNSIGNED NULL,
+    save_consent VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+    expires_at TIMESTAMP(3) NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_conversation_address_drafts_public_id (public_id),
+    KEY idx_conversation_address_drafts_conversation (conversation_id, created_at),
+    CONSTRAINT fk_conversation_address_drafts_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    CONSTRAINT fk_conversation_address_drafts_message FOREIGN KEY (inbound_message_id) REFERENCES messages(id) ON DELETE SET NULL,
+    CONSTRAINT fk_conversation_address_drafts_zone FOREIGN KEY (delivery_zone_id) REFERENCES delivery_zones(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE order_batches (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    customer_id BIGINT UNSIGNED NOT NULL,
+    conversation_id BIGINT UNSIGNED NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'REVIEW',
+    payment_policy VARCHAR(40) NOT NULL DEFAULT 'SEPARATE_CASH',
+    shared_address_id BIGINT UNSIGNED NULL,
+    idempotency_key VARCHAR(255) NOT NULL,
+    summary_revision INT UNSIGNED NOT NULL DEFAULT 1,
+    confirmed_at TIMESTAMP(3) NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_order_batches_public_id (public_id),
+    UNIQUE KEY uq_order_batches_idempotency (idempotency_key),
+    KEY idx_order_batches_customer (customer_id, status),
+    CONSTRAINT fk_order_batches_customer FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_order_batches_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
+    CONSTRAINT fk_order_batches_address FOREIGN KEY (shared_address_id) REFERENCES customer_addresses(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE order_batch_children (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    order_batch_id BIGINT UNSIGNED NOT NULL,
+    cart_id BIGINT UNSIGNED NOT NULL,
+    merchant_id BIGINT UNSIGNED NOT NULL,
+    merchant_branch_id BIGINT UNSIGNED NOT NULL,
+    customer_address_id BIGINT UNSIGNED NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'REVIEW',
+    confirmation_status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+    quoted_subtotal DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    quoted_delivery_fee DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    quoted_tax_total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    quoted_total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    quoted_eta_minutes INT UNSIGNED NULL,
+    idempotency_key VARCHAR(255) NOT NULL,
+    order_id BIGINT UNSIGNED NULL,
+    failure_reason VARCHAR(1000) NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_order_batch_children_public_id (public_id),
+    UNIQUE KEY uq_order_batch_children_batch_branch (order_batch_id, merchant_branch_id),
+    UNIQUE KEY uq_order_batch_children_cart (cart_id),
+    UNIQUE KEY uq_order_batch_children_idempotency (idempotency_key),
+    UNIQUE KEY uq_order_batch_children_order (order_id),
+    KEY idx_order_batch_children_batch (order_batch_id, status),
+    CONSTRAINT fk_order_batch_children_batch FOREIGN KEY (order_batch_id) REFERENCES order_batches(id) ON DELETE CASCADE,
+    CONSTRAINT fk_order_batch_children_cart FOREIGN KEY (cart_id) REFERENCES carts(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_order_batch_children_merchant FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_order_batch_children_branch FOREIGN KEY (merchant_branch_id) REFERENCES merchant_branches(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_order_batch_children_address FOREIGN KEY (customer_address_id) REFERENCES customer_addresses(id) ON DELETE SET NULL,
+    CONSTRAINT fk_order_batch_children_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+ALTER TABLE carts ADD COLUMN order_batch_id BIGINT UNSIGNED NULL, ADD KEY idx_carts_order_batch (order_batch_id),
+    ADD CONSTRAINT fk_carts_order_batch FOREIGN KEY (order_batch_id) REFERENCES order_batches(id) ON DELETE SET NULL;
+ALTER TABLE orders ADD COLUMN order_batch_id BIGINT UNSIGNED NULL, ADD KEY idx_orders_order_batch (order_batch_id),
+    ADD CONSTRAINT fk_orders_order_batch FOREIGN KEY (order_batch_id) REFERENCES order_batches(id) ON DELETE SET NULL;
 
 SET FOREIGN_KEY_CHECKS = 1;
 

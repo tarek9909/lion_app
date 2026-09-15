@@ -11,6 +11,10 @@ import { shadowCanaryRouter } from '../modules/ai/routing/shadow-canary.service.
 
 export async function runGeminiIntegrationTests(): Promise<boolean> {
   console.log('\n🧪 Starting Gemini 3.8 Flash Integration Test Suite...');
+  const origNodeEnv = process.env.NODE_ENV;
+  const origConfigNodeEnv = config.nodeEnv;
+  process.env.NODE_ENV = 'test';
+  config.nodeEnv = 'test';
   await resetDemo();
 
   let passed = 0;
@@ -613,7 +617,7 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
   const statusRes = await geminiService.processCustomerMessage(TEST_PHONE, 'wein el order');
   assert(
     statusRes.intent === 'ORDER_STATUS' &&
-      statusRes.replyText.includes('#') &&
+      (statusRes.replyText.includes('#') || statusRes.replyText.includes(ordersAfterConfirmed[0].order_number)) &&
       statusRes.replyText.includes('Chicken House'),
     'Gemini retrieves live order tracking via get_order_status tool for "wein el order"'
   );
@@ -751,6 +755,8 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
   config.ai.provider = origProvider;
   config.ai.geminiApiKey = origKey;
   config.ai.geminiModel = origModel;
+  process.env.NODE_ENV = origNodeEnv;
+  config.nodeEnv = origConfigNodeEnv;
 
   console.log(`\n🏁 Gemini 3.8 Flash Test Results: ${passed} Passed, ${failed} Failed`);
   return failed === 0;

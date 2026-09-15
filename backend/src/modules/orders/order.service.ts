@@ -15,7 +15,8 @@ export class OrderService {
     customerId: number,
     addressId: number,
     customerNotes?: string | null,
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    options?: { cartId?: number; orderBatchId?: number; conversationId?: number }
   ): Promise<Order> {
     const conn = await pool.getConnection();
 
@@ -40,7 +41,9 @@ export class OrderService {
       }
 
       // Fetch active cart
-      const cart = await cartService.getOrCreateActiveCart(customerId);
+      const cart = options?.cartId
+        ? await cartService.getCartById(options.cartId)
+        : await cartService.getOrCreateActiveCart(customerId);
       if (cart.items.length === 0) {
         throw new Error('Cannot checkout an empty cart');
       }
@@ -125,15 +128,17 @@ export class OrderService {
       // Insert Order
       const [insertRes]: any = await conn.query(`
         INSERT INTO orders (
-          public_id, order_number, customer_id, cart_id, merchant_id, merchant_branch_id,
+          public_id, order_number, customer_id, conversation_id, cart_id, order_batch_id, merchant_id, merchant_branch_id,
           customer_address_id, status, payment_method_code, payment_status, currency,
           subtotal, delivery_fee, grand_total, customer_notes, confirmed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', 'CASH', 'PENDING', 'USD', ?, ?, ?, ?, NOW())
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', 'CASH', 'PENDING', 'USD', ?, ?, ?, ?, NOW())
       `, [
         publicId,
         orderNumber,
         customerId,
+        options?.conversationId || null,
         cart.id,
+        options?.orderBatchId || null,
         merchantId,
         merchantBranchId,
         addressId,

@@ -54,9 +54,9 @@ export function runLanguageConsistencyTests(): void {
   }
 
   const prompt = getGeminiSystemPrompt(undefined, 'fr');
-  assert(prompt.includes('detected as French'), 'Gemini prompt receives the current sender language');
-  assert(prompt.includes('answer in French'), 'Gemini prompt mandates French output');
-  assert(prompt.includes('Never send a default English reply'), 'Gemini prompt forbids English drift');
+  assert(prompt.includes('Language for this turn is French'), 'Gemini prompt receives the current sender language');
+  assert(prompt.includes('French receives French'), 'Gemini prompt mandates French output');
+  assert(prompt.includes('latest customer language and script'), 'Gemini prompt forbids language drift');
 
   console.log('Language consistency tests passed.');
 }
@@ -69,4 +69,3 @@ if (process.argv[1]?.replace(/\\/g, '/').endsWith('/test-language-consistency.ts
     process.exit(1);
   }
 }
-

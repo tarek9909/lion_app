@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
+import { PiiRedactor } from '../telemetry/pii-redactor.js';
 
 export interface DatasetTurnRecord {
   id: string;
@@ -11,6 +12,7 @@ export interface DatasetTurnRecord {
   history: Array<{ role: 'user' | 'assistant' | 'tool'; text: string }>;
   state_before: Record<string, any>;
   customer_message: string;
+  model_response?: string;
   language: 'en' | 'ar' | 'ar_lb' | 'arabizi' | 'mixed';
   intent: string;
   entities: Record<string, any>;
@@ -741,6 +743,125 @@ export function generateAllDatasets(outputDir?: string): void {
   fs.writeFileSync(path.join(targetDir, 'dataset_manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 
   console.log(`[DatasetBuilder] Successfully generated datasets in: ${targetDir}`);
+}
+
+/**
+ * Validate a Gemini conversation record before export.
+ * Verifies that:
+ * 1. Messages array has user and model turns.
+ * 2. User and model content are non-empty strings.
+ * 3. No unredacted phone numbers, GPS coordinates, or API keys exist in the exported text.
+ */
+export function validateGeminiTrainingRecord(record: {
+  messages: Array<{ role: string; content: string }>;
+}): { valid: boolean; error?: string } {
+  if (!record || !Array.isArray(record.messages) || record.messages.length < 2) {
+    return { valid: false, error: 'Record must have at least user and model messages' };
+  }
+
+  const userTurn = record.messages.find((m) => m.role === 'user');
+  const modelTurn = record.messages.find((m) => m.role === 'model');
+
+  if (!userTurn || !userTurn.content || typeof userTurn.content !== 'string') {
+    return { valid: false, error: 'Missing or empty user turn' };
+  }
+  if (!modelTurn || !modelTurn.content || typeof modelTurn.content !== 'string') {
+    return { valid: false, error: 'Missing or empty model turn' };
+  }
+
+  // PII Safety Check: ensure no raw phone numbers, GPS, or API keys leaked
+  const piiCheck = PiiRedactor.redact(userTurn.content + ' ' + modelTurn.content);
+  if (piiCheck.redactionsCount > 0) {
+    return {
+      valid: false,
+      error: `Unredacted PII detected in training record: ${piiCheck.redactedTypes.join(', ')}`,
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Export records into standard Gemini Fine-Tuning JSONL format:
+ * {"messages": [{"role": "user", "content": "..."}, {"role": "model", "content": "..."}]}
+ * Faithfully pairs approved sanitized user message with approved sanitized assistant output.
+ */
+export function exportGeminiFineTuningJsonl(
+  records: DatasetTurnRecord[],
+  targetDir?: string,
+  datasetVersion: string = 'v1.0.0'
+): {
+  trainCount: number;
+  valCount: number;
+  trainPath: string;
+  valPath: string;
+  manifestPath: string;
+  version: string;
+} {
+  const baseDir = path.resolve(process.cwd(), '../datasets/v1');
+  const altDir = path.resolve(process.cwd(), 'datasets/v1');
+  const dir = targetDir || (fs.existsSync(baseDir) ? baseDir : altDir);
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const trainRecords = records.filter((r) => r.split === 'train');
+  const valRecords = records.filter((r) => r.split === 'val');
+
+  const formatAndValidateLine = (r: DatasetTurnRecord): string => {
+    // Faithful pairing of user turn with approved model response
+    const assistantContent = r.model_response || (r.required_reply_facts.length > 0 ? r.required_reply_facts.join(' ') : r.intent);
+    const lineObj = {
+      messages: [
+        { role: 'user', content: r.customer_message },
+        { role: 'model', content: assistantContent },
+      ],
+    };
+
+    const validation = validateGeminiTrainingRecord(lineObj);
+    if (!validation.valid) {
+      throw new Error(`Invalid training record ${r.id}: ${validation.error}`);
+    }
+
+    return JSON.stringify(lineObj);
+  };
+
+  const trainLines = trainRecords.map(formatAndValidateLine);
+  const valLines = valRecords.map(formatAndValidateLine);
+
+  const trainPath = path.join(dir, 'gemini_train.jsonl');
+  const valPath = path.join(dir, 'gemini_val.jsonl');
+  const manifestPath = path.join(dir, `dataset_manifest_${datasetVersion}.json`);
+
+  fs.writeFileSync(trainPath, trainLines.join('\n'), 'utf8');
+  fs.writeFileSync(valPath, valLines.join('\n'), 'utf8');
+
+  // Versioned dataset manifest
+  const manifest = {
+    datasetVersion,
+    exportedAt: new Date().toISOString(),
+    totalRecords: records.length,
+    trainCount: trainRecords.length,
+    valCount: valRecords.length,
+    provenanceBreakdown: records.reduce((acc, r) => {
+      acc[r.provenance] = (acc[r.provenance] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>),
+    humanReviewStatus: records.every((r) => r.human_review_status === 'HUMAN_APPROVED')
+      ? 'ALL_HUMAN_APPROVED'
+      : 'PARTIAL_REVIEWED',
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+  return {
+    trainCount: trainRecords.length,
+    valCount: valRecords.length,
+    trainPath,
+    valPath,
+    manifestPath,
+    version: datasetVersion,
+  };
 }
 
 if (process.argv[1] && process.argv[1].endsWith('dataset-builder.ts')) {

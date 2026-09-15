@@ -24,6 +24,7 @@ import {
   getLanguageSafeFallback,
 } from './sender-language.js';
 import { localizeSmartNluResult } from './response-localizer.js';
+import { withConversationTurnLock } from '../conversations/conversation-turn-lock.js';
 
 export { AIContextState, ValidatedIntent, AIProcessResult };
 
@@ -118,29 +119,27 @@ export class AIService {
     whatsappNumber: string,
     messageText: string,
     mediaType?: 'text' | 'image' | 'audio' | 'location',
-    options?: { conversationId?: number; requestId?: string }
+    options?: { conversationId?: number; requestId?: string; inboundMessageId?: number; shadowMode?: boolean; canary?: boolean }
   ): Promise<AIProcessResult> {
-    const route = await shadowCanaryRouter.routeCustomerMessage(
-      whatsappNumber,
-      messageText,
-      mediaType,
-      (phone, msg, media, providerOptions) => this.processInternalLocal(phone, msg, media, providerOptions),
-      options
-    );
+    return withConversationTurnLock(options?.conversationId, async () => {
+      const route = await shadowCanaryRouter.routeCustomerMessage(
+        whatsappNumber,
+        messageText,
+        mediaType,
+        (phone, msg, media, providerOptions) => this.processInternalLocal(phone, msg, media, providerOptions),
+        options
+      );
 
-    // Smart NLU has deterministic English templates, so localize them at the
-    // provider boundary. Gemini is instructed to compose in the sender's
-    // language; this guard only replaces an obviously mismatched answer with
-    // a safe, language-matched response.
-    if (route.provider === 'smart_nlu') return route.result;
+      if (route.provider === 'smart_nlu') return route.result;
 
-    const senderLanguage = detectSenderLanguage(messageText);
-    if (isResponseInSenderLanguage(senderLanguage, route.result.replyText)) return route.result;
+      const senderLanguage = detectSenderLanguage(messageText);
+      if (isResponseInSenderLanguage(senderLanguage, route.result.replyText)) return route.result;
 
-    return {
-      ...route.result,
-      replyText: getLanguageSafeFallback(senderLanguage),
-    };
+      return {
+        ...route.result,
+        replyText: getLanguageSafeFallback(senderLanguage),
+      };
+    });
   }
 
   /**

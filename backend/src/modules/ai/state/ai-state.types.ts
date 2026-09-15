@@ -1,4 +1,5 @@
 import { redis } from '../../../database/redis.js';
+import { execute, query } from '../../../database/db.js';
 import {
   ConversationStage,
   SupportedLanguage,
@@ -76,6 +77,8 @@ export interface ActiveOrderSummarySnapshot {
 
 export interface AIConversationState {
   customerId: number;
+  /** Durable conversation primary key. Customer state must not span conversations. */
+  conversationId?: number | null;
   /** Incremented exactly once for each inbound customer message. */
   turnIndex: number;
   stage: ConversationStage;
@@ -97,6 +100,23 @@ export interface AIConversationState {
   pendingClarification: PendingClarificationState | null;
   pendingMerchantSwitch: PendingMerchantSwitchState | null;
   activeOrderSummary: ActiveOrderSummarySnapshot | null;
+  /** One explicit continuation action that owns a short follow-up. */
+  nextRequiredAction?: string | null;
+  lastAssistantQuestion?: string | null;
+  expectedEntity?: string | null;
+  pendingProductCategory?: string | null;
+  pendingProductMerchantBranchId?: number | null;
+  /** Safe address state only. Raw address detail is persisted in the draft table. */
+  addressDraft?: {
+    id?: number | null;
+    status: 'draft' | 'ambiguous' | 'unvalidated' | 'serviceable' | 'unserviceable' | 'saved';
+    area?: string | null;
+    summary?: string | null;
+    saveConsent?: 'pending' | 'accepted' | 'declined' | null;
+  } | null;
+  pendingOrderBatchId?: number | null;
+  historySummary?: string | null;
+  lastProcessedMessageId?: number | null;
   stateVersion: number;
 }
 
@@ -136,12 +156,21 @@ export interface SanitizedStateSnapshot {
     orderNumber: string;
     status: string;
   } | null;
+  nextRequiredAction?: string | null;
+  lastAssistantQuestion?: string | null;
+  expectedEntity?: string | null;
+  pendingProductCategory?: string | null;
+  addressDraft?: { status: string; area?: string | null; summary?: string | null } | null;
+  pendingOrderBatchId?: number | null;
+  historySummary?: string | null;
+  turnIndex?: number;
   stateVersion: number;
 }
 
-export function createInitialState(customerId: number, language: SupportedLanguage = 'arabizi'): AIConversationState {
+export function createInitialState(customerId: number, language: SupportedLanguage = 'arabizi', conversationId: number | null = null): AIConversationState {
   return {
     customerId,
+    conversationId,
     turnIndex: 0,
     stage: 'IDLE',
     preferredLanguage: language,
@@ -155,6 +184,15 @@ export function createInitialState(customerId: number, language: SupportedLangua
     pendingClarification: null,
     pendingMerchantSwitch: null,
     activeOrderSummary: null,
+    nextRequiredAction: null,
+    lastAssistantQuestion: null,
+    expectedEntity: null,
+    pendingProductCategory: null,
+    pendingProductMerchantBranchId: null,
+    addressDraft: null,
+    pendingOrderBatchId: null,
+    historySummary: null,
+    lastProcessedMessageId: null,
     stateVersion: 1,
   };
 }
@@ -205,47 +243,70 @@ export function sanitizeStateSnapshot(state: AIConversationState): SanitizedStat
           status: state.activeOrderSummary.status,
         }
       : null,
+    nextRequiredAction: state.nextRequiredAction || null,
+    lastAssistantQuestion: state.lastAssistantQuestion || null,
+    expectedEntity: state.expectedEntity || null,
+    pendingProductCategory: state.pendingProductCategory || null,
+    addressDraft: state.addressDraft
+      ? { status: state.addressDraft.status, area: state.addressDraft.area || null, summary: state.addressDraft.summary || null }
+      : null,
+    pendingOrderBatchId: state.pendingOrderBatchId || null,
+    historySummary: state.historySummary || null,
+    turnIndex: state.turnIndex,
     stateVersion: state.stateVersion,
   };
 }
 
-export async function loadConversationState(customerId: number): Promise<AIConversationState> {
+export async function loadConversationState(customerId: number, conversationId?: number | null): Promise<AIConversationState> {
+  if (conversationId) {
+    try {
+      const rows = await query<any[]>(
+        `SELECT state_json, version_no FROM conversation_state WHERE conversation_id = ? LIMIT 1`,
+        [conversationId],
+      );
+      if (rows.length > 0 && rows[0].state_json) {
+        const raw = typeof rows[0].state_json === 'string' ? rows[0].state_json : JSON.stringify(rows[0].state_json);
+        const parsed = JSON.parse(raw) as AIConversationState;
+        parsed.customerId = customerId;
+        parsed.conversationId = conversationId;
+        parsed.stateVersion = Number(rows[0].version_no || parsed.stateVersion || 1);
+        return normalizeLoadedState(parsed, customerId, conversationId);
+      }
+    } catch (err) {
+      console.warn('[AI State] Error reading durable conversation state:', err);
+    }
+  }
   try {
-    const raw = await redis.get(`ai:state:${customerId}`);
+    const raw = await redis.get(`ai:state:${conversationId || customerId}`);
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Migrate legacy state if necessary
-      if (!parsed.stage) parsed.stage = 'IDLE';
-      if (!parsed.preferredLanguage) parsed.preferredLanguage = 'arabizi';
-      if (!parsed.stateVersion) parsed.stateVersion = 1;
-      if (!Number.isInteger(parsed.turnIndex) || parsed.turnIndex < 0) parsed.turnIndex = 0;
-      if (parsed.selectedMerchantId && !parsed.selectedMerchant) {
-        parsed.selectedMerchant = {
-          id: parsed.selectedMerchantId,
-          name: parsed.selectedMerchantName || '',
-          branchId: parsed.selectedMerchantBranchId || 0,
-        };
-      }
-      if (parsed.budgetLimit && !parsed.activeBudget) {
-        parsed.activeBudget = { amount: parsed.budgetLimit, currency: 'USD' };
-      }
-      if (parsed.selectedAddressId && !parsed.selectedAddress) {
-        parsed.selectedAddress = {
-          id: parsed.selectedAddressId,
-          label: parsed.selectedAddressLabel || 'Home',
-          formatted: parsed.selectedAddressLabel || 'Home',
-        };
-      }
-      return parsed;
+      return normalizeLoadedState(parsed, customerId, conversationId || null);
     }
   } catch (err) {
     console.warn('[AI State] Error reading state from Redis:', err);
   }
 
-  return createInitialState(customerId);
+  return createInitialState(customerId, 'arabizi', conversationId || null);
 }
 
-export async function saveConversationState(customerId: number, state: AIConversationState): Promise<void> {
+function normalizeLoadedState(parsed: any, customerId: number, conversationId: number | null): AIConversationState {
+  if (!parsed.stage) parsed.stage = 'IDLE';
+  if (!parsed.preferredLanguage) parsed.preferredLanguage = 'arabizi';
+  if (!parsed.stateVersion) parsed.stateVersion = 1;
+  if (!Number.isInteger(parsed.turnIndex) || parsed.turnIndex < 0) parsed.turnIndex = 0;
+  if (parsed.selectedMerchantId && !parsed.selectedMerchant) {
+    parsed.selectedMerchant = { id: parsed.selectedMerchantId, name: parsed.selectedMerchantName || '', branchId: parsed.selectedMerchantBranchId || 0 };
+  }
+  if (parsed.budgetLimit && !parsed.activeBudget) parsed.activeBudget = { amount: parsed.budgetLimit, currency: 'USD' };
+  if (parsed.selectedAddressId && !parsed.selectedAddress) {
+    parsed.selectedAddress = { id: parsed.selectedAddressId, label: parsed.selectedAddressLabel || 'Home', formatted: parsed.selectedAddressLabel || 'Home' };
+  }
+  parsed.customerId = customerId;
+  parsed.conversationId = conversationId;
+  return parsed as AIConversationState;
+}
+
+export async function saveConversationState(customerId: number, state: AIConversationState, conversationId?: number | null): Promise<void> {
   try {
     state.stateVersion = (state.stateVersion || 0) + 1;
     const payload = {
@@ -256,7 +317,29 @@ export async function saveConversationState(customerId: number, state: AIConvers
       selectedMerchantName: state.selectedMerchant?.name ?? null,
       selectedMerchantBranchId: state.selectedMerchant?.branchId ?? null,
     };
-    await redis.set(`ai:state:${customerId}`, JSON.stringify(payload), 86400);
+    const targetConversationId = conversationId || state.conversationId || null;
+    if (targetConversationId) {
+      await execute(
+        `INSERT INTO conversation_state
+          (conversation_id, current_state, last_presented_options, pending_question, state_json, version_no)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+          current_state = VALUES(current_state),
+          last_presented_options = VALUES(last_presented_options),
+          pending_question = VALUES(pending_question),
+          state_json = VALUES(state_json),
+          version_no = VALUES(version_no)`,
+        [
+          targetConversationId,
+          state.stage,
+          JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
+          state.lastAssistantQuestion || null,
+          JSON.stringify(payload),
+          state.stateVersion,
+        ],
+      );
+    }
+    await redis.set(`ai:state:${targetConversationId || customerId}`, JSON.stringify(payload), 86400);
   } catch (err) {
     console.warn('[AI State] Error saving state to Redis:', err);
   }

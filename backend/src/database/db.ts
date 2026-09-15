@@ -1,7 +1,7 @@
 import mysql from 'mysql2/promise';
 import { config } from '../config/env.js';
 
-export const pool = mysql.createPool({
+export let pool = mysql.createPool({
   host: config.db.host,
   port: config.db.port,
   user: config.db.user,
@@ -13,6 +13,26 @@ export const pool = mysql.createPool({
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
 });
+
+export async function switchDatabase(newDatabase: string): Promise<void> {
+  config.db.database = newDatabase;
+  process.env.DB_NAME = newDatabase;
+  try {
+    await pool.end();
+  } catch {}
+  pool = mysql.createPool({
+    host: config.db.host,
+    port: config.db.port,
+    user: config.db.user,
+    password: config.db.password,
+    database: newDatabase,
+    waitForConnections: true,
+    connectionLimit: 15,
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000,
+  });
+}
 
 export async function query<T = any>(sql: string, params?: any[]): Promise<T> {
   const [rows] = await pool.query(sql, params);

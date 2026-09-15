@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import mysql from 'mysql2/promise';
+import dotenv from 'dotenv';
+
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 function identifier(value: string) {
   return String.fromCharCode(96) + value + String.fromCharCode(96);
@@ -27,7 +30,7 @@ export async function createIsolatedDatabase() {
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || 'mysql',
+    password: process.env.DB_PASSWORD === '__NO_PASSWORD__' ? '' : process.env.DB_PASSWORD === '' ? undefined : process.env.DB_PASSWORD ?? 'mysql',
     multipleStatements: true,
   });
   try {
@@ -54,7 +57,7 @@ export async function dropIsolatedDatabase(databaseName: string) {
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || 'mysql',
+    password: process.env.DB_PASSWORD === '__NO_PASSWORD__' ? '' : process.env.DB_PASSWORD === '' ? undefined : process.env.DB_PASSWORD ?? 'mysql',
   });
   try {
     await connection.query('DROP DATABASE IF EXISTS ' + identifier(databaseName));

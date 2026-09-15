@@ -94,8 +94,16 @@ export const redis = {
     }
   },
 
+  async selectDb(dbIndex: number): Promise<void> {
+    if (redisClient && isConnected) {
+      try {
+        await redisClient.select(dbIndex);
+      } catch {}
+    }
+  },
+
   isOnline(): boolean {
-    return isConnected;
+    return isConnected && redisClient !== null;
   },
 
   async ping(): Promise<boolean> {
@@ -107,6 +115,6 @@ export const redis = {
         return false;
       }
     }
-    return true;
+    return false;
   }
 };

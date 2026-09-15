@@ -23,6 +23,23 @@ import {
   getWhatsAppInboxMessages,
   sendWhatsAppInboxReply,
 } from './modules/dashboard/dashboard.controller.js';
+import {
+  getAILearningQueue,
+  reviewAILearningQueueItem,
+  triggerAILearningHarvest,
+  exportAILearningDataset,
+  getCustomerMemory,
+  updateCustomerMemory,
+  setCustomerTrainingConsent,
+  eraseCustomerMemory,
+  triggerRetentionCleanup,
+  submitTuningJob,
+  getTuningJobStatus,
+  listModels,
+  evaluateModel,
+  promoteModel,
+  rollbackModel,
+} from './modules/dashboard/ai-learning.controller.js';
 import { customerService } from './modules/customers/customer.service.js';
 import { login } from './modules/auth/auth.controller.js';
 import { authenticate, requireRoles } from './modules/auth/auth.middleware.js';
@@ -164,6 +181,24 @@ app.get(['/api/analytics/dashboard', '/api/analytics/overview', '/api/v1/analyti
 
 // Management AI
 app.post(['/api/management-ai/ask', '/api/v1/management-ai/ask'], authenticate, requireRoles('SUPERADMIN', 'ADMIN', 'OPERATOR'), validateBody(managementAiSchema), askManagementAI);
+
+// AI Continuous Learning & Curation Flywheel
+const aiLearningRoles = requireRoles('SUPERADMIN', 'ADMIN', 'OPERATOR');
+app.get(['/api/ai-learning/queue', '/api/v1/ai-learning/queue'], authenticate, aiLearningRoles, getAILearningQueue);
+app.post(['/api/ai-learning/queue/:publicId/review', '/api/v1/ai-learning/queue/:publicId/review'], authenticate, aiLearningRoles, reviewAILearningQueueItem);
+app.post(['/api/ai-learning/harvest', '/api/v1/ai-learning/harvest'], authenticate, aiLearningRoles, triggerAILearningHarvest);
+app.post(['/api/ai-learning/export', '/api/v1/ai-learning/export'], authenticate, aiLearningRoles, exportAILearningDataset);
+app.get(['/api/ai-learning/customer-memory/:customerId', '/api/v1/ai-learning/customer-memory/:customerId'], authenticate, aiLearningRoles, getCustomerMemory);
+app.put(['/api/ai-learning/customer-memory/:customerId', '/api/v1/ai-learning/customer-memory/:customerId'], authenticate, aiLearningRoles, updateCustomerMemory);
+app.put(['/api/ai-learning/consent/:customerId', '/api/v1/ai-learning/consent/:customerId'], authenticate, aiLearningRoles, setCustomerTrainingConsent);
+app.post(['/api/ai-learning/consent/:customerId/erase', '/api/v1/ai-learning/consent/:customerId/erase'], authenticate, aiLearningRoles, eraseCustomerMemory);
+app.post(['/api/ai-learning/retention/cleanup', '/api/v1/ai-learning/retention/cleanup'], authenticate, aiLearningRoles, triggerRetentionCleanup);
+app.post(['/api/ai-learning/tuning/jobs', '/api/v1/ai-learning/tuning/jobs'], authenticate, aiLearningRoles, submitTuningJob);
+app.get(['/api/ai-learning/tuning/jobs/:jobId', '/api/v1/ai-learning/tuning/jobs/:jobId'], authenticate, aiLearningRoles, getTuningJobStatus);
+app.get(['/api/ai-learning/models', '/api/v1/ai-learning/models'], authenticate, aiLearningRoles, listModels);
+app.post(['/api/ai-learning/models/:publicId/evaluate', '/api/v1/ai-learning/models/:publicId/evaluate'], authenticate, aiLearningRoles, evaluateModel);
+app.post(['/api/ai-learning/models/:publicId/promote', '/api/v1/ai-learning/models/:publicId/promote'], authenticate, aiLearningRoles, promoteModel);
+app.post(['/api/ai-learning/models/:publicId/rollback', '/api/v1/ai-learning/models/:publicId/rollback'], authenticate, aiLearningRoles, rollbackModel);
 
 // Demo Reset Endpoint
 app.post(['/api/demo/reset', '/api/v1/demo/reset'], authenticate, requireRoles('SUPERADMIN', 'ADMIN', 'OPERATOR'), async (req, res) => {

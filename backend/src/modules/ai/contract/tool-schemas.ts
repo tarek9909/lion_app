@@ -57,6 +57,32 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
     },
   },
 
+  resolve_product_name: {
+    name: 'resolve_product_name',
+    description: 'Resolve a short product follow-up using verified aliases, spelling candidates, and the current merchant menu. Never substitutes an unavailable product.',
+    parameters: {
+      product_name: {
+        type: 'STRING',
+        description: 'The product or drink name supplied by the customer.',
+        required: true,
+        min: 1,
+        max: 200,
+      },
+      category: {
+        type: 'STRING',
+        description: 'Pending category context such as beverage when known.',
+        required: false,
+        max: 80,
+      },
+      merchant_branch_id: {
+        type: 'INTEGER',
+        description: 'Verified current merchant branch ID when modifying an existing cart.',
+        required: false,
+        min: 1,
+      },
+    },
+  },
+
   compare_supermarket_basket: {
     name: 'compare_supermarket_basket',
     description: 'Compare a multi-item grocery shopping basket across Saida supermarkets to find the best total price.',
@@ -301,6 +327,26 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
     }),
   },
 
+  capture_delivery_address: {
+    name: 'capture_delivery_address',
+    description: 'Capture and validate a free-text delivery address or location pin while an address is expected. This never searches the catalog and never creates an order.',
+    parameters: {
+      raw_address: {
+        type: 'STRING',
+        description: 'Customer-provided address, landmark, directions, or location pin text.',
+        required: true,
+        min: 3,
+        max: 1000,
+      },
+      save_label: {
+        type: 'STRING',
+        description: 'Optional customer-provided saved-address label after consent, such as Home or Work.',
+        required: false,
+        max: 80,
+      },
+    },
+  },
+
   confirm_and_create_order: {
     name: 'confirm_and_create_order',
     description: 'Place the order after final summary review and explicit customer confirmation. Idempotent.',
@@ -329,6 +375,98 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
       confirmation_phrase: data.confirmation_phrase.trim(),
       notes: (data.notes || data.customer_notes || '').trim() || undefined,
     }),
+  },
+
+  create_multi_order_plan: {
+    name: 'create_multi_order_plan',
+    description: 'Create a reviewable batch of separate merchant orders. Preserve every selected merchant cart and do not clear or switch either one.',
+    parameters: {
+      items: {
+        type: 'ARRAY',
+        description: 'Optional additional verified products to include in independent merchant child carts.',
+        required: false,
+        max: 20,
+        items: {
+          type: 'OBJECT',
+          description: 'A verified merchant product selection.',
+          required: true,
+          properties: {
+            merchant_product_id: {
+              type: 'INTEGER',
+              description: 'Verified merchant product ID from a catalog result.',
+              required: true,
+              min: 1,
+            },
+            quantity: {
+              type: 'INTEGER',
+              description: 'Requested quantity.',
+              required: false,
+              min: 1,
+              max: 99,
+            },
+          },
+        },
+      },
+      same_address: {
+        type: 'BOOLEAN',
+        description: 'Whether the customer explicitly wants the same delivery address for both orders when already known.',
+        required: false,
+      },
+    },
+  },
+
+  review_multi_order_plan: {
+    name: 'review_multi_order_plan',
+    description: 'Return separate verified summaries, delivery fees, and totals for each child order in the pending batch.',
+    parameters: {},
+  },
+
+  set_batch_delivery_address: {
+    name: 'set_batch_delivery_address',
+    description: 'Apply one selected saved delivery address to every pending order in the batch and show fresh separate summaries. Explicit address required.',
+    parameters: {
+      address_label: {
+        type: 'STRING',
+        description: 'Saved address label selected by the customer.',
+        required: true,
+        min: 1,
+        max: 100,
+      },
+    },
+  },
+
+  confirm_order_batch: {
+    name: 'confirm_order_batch',
+    description: 'Place one or both reviewed child orders only after the customer explicitly says confirm 1, confirm 2, or confirm both.',
+    parameters: {
+      confirmation_phrase: {
+        type: 'STRING',
+        description: 'Exact customer confirmation phrase.',
+        required: true,
+        min: 1,
+        max: 100,
+      },
+      selection: {
+        type: 'STRING',
+        description: 'Child order selection: 1, 2, or both.',
+        required: false,
+        enum: ['1', '2', 'both'],
+      },
+    },
+  },
+
+  cancel_order_batch_child: {
+    name: 'cancel_order_batch_child',
+    description: 'Decline one child order before placement while preserving the other child cart.',
+    parameters: {
+      child_index: {
+        type: 'INTEGER',
+        description: 'The one-based child order number to cancel.',
+        required: true,
+        min: 1,
+        max: 20,
+      },
+    },
   },
 
   get_order_status: {
@@ -558,6 +696,7 @@ export function buildGeminiDeclaration(spec: ToolDefinitionSpec): any {
 
 // Concrete generated Zod schemas
 export const SearchCatalogSchema = buildZodSchema(CANONICAL_TOOL_SPECS.search_catalog);
+export const ResolveProductNameSchema = buildZodSchema(CANONICAL_TOOL_SPECS.resolve_product_name);
 export const CompareSupermarketBasketSchema = buildZodSchema(CANONICAL_TOOL_SPECS.compare_supermarket_basket);
 export const GetActiveCartSchema = buildZodSchema(CANONICAL_TOOL_SPECS.get_active_cart);
 export const AddToCartSchema = buildZodSchema(CANONICAL_TOOL_SPECS.add_to_cart);
@@ -568,7 +707,13 @@ export const RemoveCartItemSchema = buildZodSchema(CANONICAL_TOOL_SPECS.remove_c
 export const ClearCartSchema = buildZodSchema(CANONICAL_TOOL_SPECS.clear_cart);
 export const ListSavedAddressesSchema = buildZodSchema(CANONICAL_TOOL_SPECS.list_saved_addresses);
 export const SelectDeliveryAddressSchema = buildZodSchema(CANONICAL_TOOL_SPECS.select_delivery_address);
+export const CaptureDeliveryAddressSchema = buildZodSchema(CANONICAL_TOOL_SPECS.capture_delivery_address);
 export const ConfirmAndCreateOrderSchema = buildZodSchema(CANONICAL_TOOL_SPECS.confirm_and_create_order);
+export const CreateMultiOrderPlanSchema = buildZodSchema(CANONICAL_TOOL_SPECS.create_multi_order_plan);
+export const ReviewMultiOrderPlanSchema = buildZodSchema(CANONICAL_TOOL_SPECS.review_multi_order_plan);
+export const SetBatchDeliveryAddressSchema = buildZodSchema(CANONICAL_TOOL_SPECS.set_batch_delivery_address);
+export const ConfirmOrderBatchSchema = buildZodSchema(CANONICAL_TOOL_SPECS.confirm_order_batch);
+export const CancelOrderBatchChildSchema = buildZodSchema(CANONICAL_TOOL_SPECS.cancel_order_batch_child);
 export const GetOrderStatusSchema = buildZodSchema(CANONICAL_TOOL_SPECS.get_order_status);
 export const RequestHumanSupportSchema = buildZodSchema(CANONICAL_TOOL_SPECS.request_human_support);
 export const SwitchMerchantConfirmSchema = buildZodSchema(CANONICAL_TOOL_SPECS.switch_merchant_confirm);
@@ -576,6 +721,7 @@ export const SwitchMerchantRejectSchema = buildZodSchema(CANONICAL_TOOL_SPECS.sw
 
 export const ToolArgumentSchemas = {
   search_catalog: SearchCatalogSchema,
+  resolve_product_name: ResolveProductNameSchema,
   compare_supermarket_basket: CompareSupermarketBasketSchema,
   get_active_cart: GetActiveCartSchema,
   add_to_cart: AddToCartSchema,
@@ -587,7 +733,13 @@ export const ToolArgumentSchemas = {
   list_saved_addresses: ListSavedAddressesSchema,
   get_customer_addresses: ListSavedAddressesSchema,
   select_delivery_address: SelectDeliveryAddressSchema,
+  capture_delivery_address: CaptureDeliveryAddressSchema,
   confirm_and_create_order: ConfirmAndCreateOrderSchema,
+  create_multi_order_plan: CreateMultiOrderPlanSchema,
+  review_multi_order_plan: ReviewMultiOrderPlanSchema,
+  set_batch_delivery_address: SetBatchDeliveryAddressSchema,
+  confirm_order_batch: ConfirmOrderBatchSchema,
+  cancel_order_batch_child: CancelOrderBatchChildSchema,
   get_order_status: GetOrderStatusSchema,
   request_human_support: RequestHumanSupportSchema,
   switch_merchant_confirm: SwitchMerchantConfirmSchema,

@@ -2,9 +2,11 @@ import http from 'http';
 import { app } from './app.js';
 import { config, validateStartupConfig } from './config/env.js';
 import { testDbConnection } from './database/db.js';
+import { ensureAILearningTables } from './database/ensure-ai-learning-tables.js';
 import { initWebSocketServer } from './services/websocket.js';
 import { cartService } from './modules/carts/cart.service.js';
 import { whatsappWorker } from './modules/conversations/whatsapp.worker.js';
+import { harvestingWorker } from './modules/ai/dataset/harvesting-worker.js';
 
 const server = http.createServer(app);
 
@@ -22,8 +24,10 @@ async function startServer() {
     process.exit(1);
   }
   console.log(`✅ Connected to MySQL database "${config.db.database}" on ${config.db.host}:${config.db.port}`);
+  await ensureAILearningTables();
   cartService.startAbandonmentScheduler();
   whatsappWorker.start();
+  harvestingWorker.start();
 
   server.listen(config.port, () => {
     console.log(`🦁 Lion Delivery API Server running at http://localhost:${config.port}`);

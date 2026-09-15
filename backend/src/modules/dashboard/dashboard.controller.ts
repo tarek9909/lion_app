@@ -3,6 +3,7 @@ import { query, execute } from '../../database/db.js';
 import { sendSuccess, sendError } from '../../shared/response.js';
 import { whatsappService } from '../whatsapp/whatsapp.service.js';
 import { broadcastEvent } from '../../services/websocket.js';
+import { sanitizeCustomerOutput } from '../ai/customer-output.js';
 
 export async function getDashboardContacts(_req: Request, res: Response) {
   try {
@@ -117,7 +118,10 @@ export async function getWhatsAppInboxMessages(req: Request, res: Response) {
 export async function sendWhatsAppInboxReply(req: Request, res: Response) {
   try {
     const conversationId = Number(req.params.id);
-    const text = String(req.body.text || '').trim();
+    const text = sanitizeCustomerOutput(req.body.text);
+    if (!text) {
+      return sendError(res, 'WhatsApp reply text is required after removing unsupported formatting', 400);
+    }
     const conversations = await query<any[]>(`
       SELECT conv.id, c.whatsapp_number
       FROM conversations conv
@@ -145,7 +149,7 @@ export async function sendWhatsAppInboxReply(req: Request, res: Response) {
       conversationId,
       phone: recipient,
       customerMessage: null,
-      aiReply: text,
+      aiReply: result.text,
       source: 'DASHBOARD_OPERATOR',
       timestamp: new Date().toISOString(),
     });
@@ -153,7 +157,7 @@ export async function sendWhatsAppInboxReply(req: Request, res: Response) {
     return sendSuccess(res, {
       conversationId,
       phone: recipient,
-      text,
+      text: result.text,
       status: 'SENT',
       providerMessageId: result.messageId,
     });

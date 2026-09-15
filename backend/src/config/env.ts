@@ -10,7 +10,9 @@ const envSchema = z.object({
   DB_HOST: z.string().default('127.0.0.1'),
   DB_PORT: z.string().default('3306').transform((val) => parseInt(val, 10)),
   DB_USER: z.string().default('root'),
-  DB_PASSWORD: z.string().default('mysql'),
+  // Windows omits an empty process environment value. The explicit sentinel
+  // keeps local disposable-test runs able to target passwordless MySQL.
+  DB_PASSWORD: z.string().default('mysql').transform((value) => value === '__NO_PASSWORD__' ? '' : value),
   DB_NAME: z.string().default('lion_delivery'),
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   DASHBOARD_URL: z.string().default('http://localhost:5173'),

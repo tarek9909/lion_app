@@ -2,6 +2,7 @@ import { shadowCanaryRouter } from '../modules/ai/routing/shadow-canary.service.
 import { AIProcessResult } from '../modules/ai/ai.types.js';
 import { query } from '../database/db.js';
 import { config } from '../config/env.js';
+import { geminiService } from '../modules/ai/gemini.service.js';
 
 function assert(condition: boolean, message: string, extra?: any) {
   if (!condition) {
@@ -14,6 +15,9 @@ function assert(condition: boolean, message: string, extra?: any) {
 async function runShadowCanaryTests() {
   console.log('\n🧪 Starting Shadow, Canary, and Rollback Routing Tests (Phase 10)...');
 
+  const originalGeminiKey = config.ai.geminiApiKey;
+  config.ai.geminiApiKey = 'shadow-router-fixture-key';
+  geminiService.setFetchFn(async () => new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'Gemini fixture reply.' }] } }] }), { status: 200 }));
   const mockStableProcessor = async (phone: string, text: string): Promise<AIProcessResult> => {
     return {
       replyText: `Stable reply for ${text}`,

@@ -1,164 +1,87 @@
-import { aiService } from '../modules/ai/ai.service.js';
 import { resetDemo } from './reset-demo.js';
+import { aiService } from '../modules/ai/ai.service.js';
+import { aiToolsExecutor } from '../modules/ai/tools/ai-tools.executor.js';
+import { customerService } from '../modules/customers/customer.service.js';
+import { cartService } from '../modules/carts/cart.service.js';
+import { createInitialState, saveConversationState } from '../modules/ai/state/ai-state.types.js';
+import { persistInboundMessage } from '../modules/conversations/conversation.persistence.js';
+import { query } from '../database/db.js';
+import { config } from '../config/env.js';
+import { geminiService } from '../modules/ai/gemini.service.js';
+import { shadowCanaryRouter } from '../modules/ai/routing/shadow-canary.service.js';
+import { hasForbiddenCustomerPresentation } from '../modules/ai/customer-output.js';
 
-interface TestCase {
-  id: number;
-  name: string;
-  message: string;
-  mediaType?: 'text' | 'image' | 'audio';
-  expectedIntent: string;
-  expectedContentSubstrings: string[];
+const PHONE = '96170999111';
+function assert(value: boolean, label: string): void { if (!value) throw new Error(label); console.log(`  PASS ${label}`); }
+
+async function conversation(text: string) {
+  return persistInboundMessage(PHONE, text, { providerMessageId: `p0-${Date.now()}-${Math.random()}` });
 }
-
-const TEST_PHONE = '96170123456';
-
-const testCases: TestCase[] = [
-  {
-    id: 1,
-    name: 'Budget Search',
-    message: 'bade crispy chicken under 15$',
-    expectedIntent: 'SEARCH_RESULTS',
-    expectedContentSubstrings: ['Crispy Chicken', '$10.50', 'Burger Spot', '$12.00'],
-  },
-  {
-    id: 2,
-    name: 'Context Memory & Comparison',
-    message: 'which one is best rated?',
-    expectedIntent: 'COMPARE_CURRENT_OPTIONS',
-    expectedContentSubstrings: ['Chicken House', '4.8⭐'],
-  },
-  {
-    id: 3,
-    name: 'Selection & Notes',
-    message: 'add the second one bas without pickles',
-    expectedIntent: 'ADD_TO_CART',
-    expectedContentSubstrings: ['Burger Spot', 'No pickles', 'Cart Subtotal'],
-  },
-  {
-    id: 4,
-    name: 'Product Modification',
-    message: 'without pickles',
-    expectedIntent: 'PRODUCT_MODIFICATION',
-    expectedContentSubstrings: ['No pickles'],
-  },
-  {
-    id: 5,
-    name: 'Add Additional Product',
-    message: 'add coke zero',
-    expectedIntent: 'ADD_TO_CART',
-    expectedContentSubstrings: ['Coke Zero', 'total'],
-  },
-  {
-    id: 6,
-    name: 'Quantity Correction',
-    message: 'actually make it one meal',
-    expectedIntent: 'UPDATE_QUANTITY',
-    expectedContentSubstrings: ['1 meal', 'total'],
-  },
-  {
-    id: 7,
-    name: 'Ambiguity & Clarification Rule',
-    message: 'large',
-    expectedIntent: 'CLARIFICATION_REQUIRED',
-    expectedContentSubstrings: ['Do you mean the Coke or the meal?'],
-  },
-  {
-    id: 8,
-    name: 'Arabizi Request',
-    message: 'bade shi 7elo bas ma ykoun ghale',
-    expectedIntent: 'SEARCH_DESSERTS',
-    expectedContentSubstrings: ['Beirut Sweets', 'Crepe', 'Cake'],
-  },
-  {
-    id: 9,
-    name: 'Arabic Request',
-    message: 'بدي شي حلو تحت ٣ دولار',
-    expectedIntent: 'SEARCH_DESSERTS',
-    expectedContentSubstrings: ['Beirut Sweets', '2.50'],
-  },
-  {
-    id: 10,
-    name: 'Mixed Language Request',
-    message: 'anything chocolate bas under 3$',
-    expectedIntent: 'SEARCH_DESSERTS',
-    expectedContentSubstrings: ['Chocolate Cake', '2.50'],
-  },
-  {
-    id: 11,
-    name: 'Voice Note Ingestion',
-    message: 'bade 2 coke zero w lays w shufle arkhass mahal',
-    mediaType: 'audio',
-    expectedIntent: 'BASKET_COMPARISON',
-    expectedContentSubstrings: ['Metro Supermarket', 'Coke Zero', 'Lays', 'Majmou3 l basket kello'],
-  },
-  {
-    id: 12,
-    name: 'Image Understanding (Context bound)',
-    message: 'do they have this?',
-    mediaType: 'image',
-    expectedIntent: 'IMAGE_SEARCH',
-    expectedContentSubstrings: ['Crispy Chicken Meal', '$10.50'],
-  },
-  {
-    id: 13,
-    name: 'Merchant Comparison',
-    message: 'is there somewhere cheaper?',
-    expectedIntent: 'SEARCH_CHEAPER',
-    expectedContentSubstrings: ['Chicken House', '$10.50'],
-  },
-  {
-    id: 14,
-    name: 'Saved Address Resolution',
-    message: '3al bet',
-    expectedIntent: 'ADDRESS_SELECTED',
-    expectedContentSubstrings: ['Home', 'Molakhas el talab l nehe2e', 'confirm'],
-  },
-  {
-    id: 15,
-    name: 'Checkout Confirmation',
-    message: 'confirm',
-    expectedIntent: 'ORDER_CONFIRMED',
-    expectedContentSubstrings: ['Order Confirmed', 'Order #ORD-2026-'],
-  },
-];
 
 export async function runConversationTestPack(): Promise<boolean> {
-  console.log('🧪 Starting Lion Delivery AI Conversation Test Pack (15 Scenarios)...');
+  console.log('Starting Gemini customer P0/P1 acceptance suite...');
+  const previousKey = config.ai.geminiApiKey;
+  const previousProvider = config.ai.provider;
+  const previousRouterConfig = shadowCanaryRouter.getConfig();
+  const origNodeEnv = process.env.NODE_ENV;
+  const origConfigNodeEnv = config.nodeEnv;
+  process.env.NODE_ENV = 'test';
+  config.nodeEnv = 'test';
+  config.ai.geminiApiKey = 'acceptance_fixture_key';
+  config.ai.provider = 'gemini';
+  shadowCanaryRouter.configure({ stableProvider: 'gemini', routingMode: 'STABLE_ONLY', canaryPercentage: 0 });
   await resetDemo();
+  geminiService.setFetchFn(async () => new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'I did not understand that. Please tell me what you would like to order.' }] } }] }), { status: 200 }));
+  try {
+    const first = await conversation('J');
+    const unclear = await aiService.processCustomerMessage(PHONE, 'J', 'text', { conversationId: first.conversationId });
+    assert(unclear.intent === 'CLARIFICATION_REQUIRED' && !hasForbiddenCustomerPresentation(unclear.replyText), 'unclear input is plain-text clarification without mutation');
 
-  let passed = 0;
-  let failed = 0;
+    const customer = await customerService.findByPhone(PHONE);
+    const greetingState = createInitialState(customer!.id, 'en', first.conversationId);
+    greetingState.stage = 'SELECTING_ADDRESS'; greetingState.nextRequiredAction = 'SELECT_ADDRESS';
+    greetingState.lastAssistantQuestion = 'Please send your delivery address.'; greetingState.expectedEntity = 'delivery_address';
+    await saveConversationState(customer!.id, greetingState, first.conversationId);
+    const greeting = await aiService.processCustomerMessage(PHONE, 'Hello', 'text', { conversationId: first.conversationId });
+    assert(/delivery address/i.test(greeting.replyText) && !/welcome/i.test(greeting.replyText), 'greeting retains active task');
 
-  for (const tc of testCases) {
-    try {
-      const result = await aiService.processCustomerMessage(TEST_PHONE, tc.message, tc.mediaType || 'text');
+    const cart = await cartService.getOrCreateActiveCart(customer!.id);
+    const products = await query<any[]>(`SELECT mp.id FROM merchant_products mp JOIN products p ON p.id=mp.product_id WHERE p.canonical_name LIKE '%Crispy%' LIMIT 1`);
+    await cartService.addItem(cart.id, Number(products[0].id), 1);
+    greetingState.stage = 'SELECTING_ADDRESS'; await saveConversationState(customer!.id, greetingState, first.conversationId);
+    const address = await aiService.processCustomerMessage(PHONE, 'Saida, Abra, near the municipal building, floor 2', 'text', { conversationId: first.conversationId });
+    assert(String(address.intent) === 'CAPTURE_DELIVERY_ADDRESS' && !/catalog/i.test(address.replyText), 'detailed address reaches address draft flow rather than catalog search');
 
-      const intentOk = result.intent === tc.expectedIntent;
-      const contentOk = tc.expectedContentSubstrings.every(s =>
-        result.replyText.toLowerCase().includes(s.toLowerCase())
-      );
+    const missingHomeState = createInitialState(customer!.id, 'en', first.conversationId); missingHomeState.stage = 'SELECTING_ADDRESS';
+    const home = await aiToolsExecutor.executeTool('select_delivery_address', { address_label: 'Home' }, customer!.id, missingHomeState, 0, undefined, 'Home');
+    assert(home.errorCode === 'ADDRESS_NOT_FOUND', 'missing Home never defaults to another address');
 
-      if (intentOk && contentOk) {
-        console.log(`  ✅ Test ${tc.id}: ${tc.name} [PASS]`);
-        passed++;
-      } else {
-        console.error(`  ❌ Test ${tc.id}: ${tc.name} [FAIL]`);
-        if (!intentOk) console.error(`     Expected intent: ${tc.expectedIntent}, got: ${result.intent}`);
-        if (!contentOk) console.error(`     Reply missing expected content. Reply: ${result.replyText}`);
-        failed++;
-      }
-    } catch (err: any) {
-      console.error(`  ❌ Test ${tc.id}: ${tc.name} [ERROR]:`, err.message);
-      failed++;
-    }
+    const trackingState = createInitialState(customer!.id, 'en', first.conversationId);
+    await saveConversationState(customer!.id, trackingState, first.conversationId);
+    const noOrder = await aiService.processCustomerMessage(PHONE, 'Where is my order?', 'text', { conversationId: first.conversationId });
+    assert(noOrder.intent === 'ORDER_STATUS' && /do not have an active order/i.test(noOrder.replyText) && !/catalog/i.test(noOrder.replyText), `order tracking reports no active order without catalog miss: ${noOrder.replyText}`);
+
+    const productState = createInitialState(customer!.id, 'arabizi', first.conversationId); productState.pendingProductCategory = 'beverage';
+    const drink = await aiToolsExecutor.executeTool('resolve_product_name', { product_name: 'Kinza', category: 'beverage' }, customer!.id, productState, 0);
+    assert(drink.success && drink.result.requested_name === 'Kinza' && drink.result.matched_product == null, 'drink resolution preserves request without Coke substitution');
+
+    const burgerRows = await query<any[]>(`SELECT mp.id FROM merchant_products mp JOIN merchant_branches mb ON mb.id=mp.merchant_branch_id JOIN merchants m ON m.id=mb.merchant_id WHERE m.name = 'Burger Spot' LIMIT 1`);
+    const batchState = createInitialState(customer!.id, 'en', first.conversationId);
+    const batchPlan = await aiToolsExecutor.executeTool('create_multi_order_plan', { items: [{ merchant_product_id: Number(burgerRows[0].id), quantity: 1 }] }, customer!.id, batchState, 0, undefined, 'order from both places');
+    assert(batchPlan.success && batchPlan.result.children.length === 2, 'two merchants create two independent reviewable batch children');
+    const addressSet = await aiToolsExecutor.executeTool('set_batch_delivery_address', { address_label: 'Delivery address' }, customer!.id, batchState, 0, undefined, 'same address');
+    const batchConfirm = await aiToolsExecutor.executeTool('confirm_order_batch', { confirmation_phrase: 'confirm both', selection: 'both' }, customer!.id, batchState, 0, undefined, 'confirm both');
+    assert(addressSet.success && batchConfirm.success && batchConfirm.result.children.every((child: any) => child.status === 'PLACED'), 'batch requires address and explicit confirm both before placing separate orders');
+    return true;
+  } catch (error) { console.error(error); return false; }
+  finally {
+    geminiService.resetFetchFn();
+    config.ai.geminiApiKey = previousKey;
+    config.ai.provider = previousProvider;
+    shadowCanaryRouter.configure(previousRouterConfig);
+    process.env.NODE_ENV = origNodeEnv;
+    config.nodeEnv = origConfigNodeEnv;
   }
-
-  console.log(`\n🏁 Test Pack Results: ${passed} Passed, ${failed} Failed out of ${testCases.length}`);
-  return failed === 0;
 }
 
-if (process.argv[1]?.endsWith('test-conversations.ts') || process.argv[1]?.endsWith('test-conversations.js')) {
-  runConversationTestPack()
-    .then((ok) => process.exit(ok ? 0 : 1))
-    .catch(() => process.exit(1));
-}
+if (process.argv[1]?.endsWith('test-conversations.ts')) runConversationTestPack().then(ok => process.exit(ok ? 0 : 1));

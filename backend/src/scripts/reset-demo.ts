@@ -66,7 +66,9 @@ export async function resetDemo() {
       DELETE FROM orders WHERE order_number NOT LIKE 'ORD-DEMO-%'
     `);
 
-    // 3. Clear carts & cart items
+    // 3. Clear batches, carts & cart items
+    await conn.query(`DELETE FROM order_batch_children`);
+    await conn.query(`DELETE FROM order_batches`);
     await conn.query(`DELETE FROM cart_item_addons`);
     await conn.query(`DELETE FROM cart_items`);
     await conn.query(`DELETE FROM carts`);

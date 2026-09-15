@@ -3,8 +3,9 @@ import { catalogService, SearchResult } from '../../catalog/catalog.service.js';
 import { cartService } from '../../carts/cart.service.js';
 import { customerService } from '../../customers/customer.service.js';
 import { orderService } from '../../orders/order.service.js';
+import { orderBatchService } from '../../orders/order-batch.service.js';
 import { ToolArgumentSchemas } from '../contract/tool-schemas.js';
-import { isMutatingTool, ControlledTool } from '../contract/behavior.contract.js';
+import { isMutatingTool, ControlledTool, isToolAllowedAtStage } from '../contract/behavior.contract.js';
 import {
   AIConversationState,
   CartSummarySnapshot,
@@ -192,6 +193,27 @@ export class AiToolsExecutor {
     };
   }
 
+  private batchResult(batch: import('../../orders/order-batch.service.js').OrderBatchSummary) {
+    return {
+      batch_id: batch.id,
+      payment_policy: 'SEPARATE_CASH',
+      status: batch.status,
+      children: batch.children.map((child) => ({
+        child_index: child.index,
+        merchant_name: child.merchantName,
+        cart_id: child.cartId,
+        address_id: child.addressId,
+        status: child.status,
+        confirmation_status: child.confirmationStatus,
+        subtotal: child.subtotal,
+        delivery_fee: child.deliveryFee,
+        total: child.total,
+        order_number: child.orderNumber || null,
+        failure_reason: child.failureReason || null,
+      })),
+    };
+  }
+
   /**
    * Execute a single controlled tool against the backend services.
    */
@@ -245,6 +267,17 @@ export class AiToolsExecutor {
         result: { success: false, error: `Unknown tool: ${toolName}` },
         error: `Unknown tool: ${toolName}`,
         errorCode: 'TOOL_NOT_FOUND',
+        stateChanged: false,
+      };
+    }
+
+    if (!isToolAllowedAtStage(state?.stage || 'IDLE', toolName)) {
+      return {
+        toolName,
+        success: false,
+        result: { success: false, error: 'TOOL_NOT_ALLOWED_FOR_PENDING_TASK' },
+        error: 'TOOL_NOT_ALLOWED_FOR_PENDING_TASK',
+        errorCode: 'TOOL_NOT_ALLOWED_FOR_PENDING_TASK',
         stateChanged: false,
       };
     }
@@ -328,6 +361,40 @@ export class AiToolsExecutor {
               price: `$${Number(r.basePrice).toFixed(2)}`,
               delivery_fee: `$${Number(r.deliveryFee).toFixed(2)}`,
               eta_minutes: r.estimatedMinutes,
+            })),
+          },
+          stateChanged: true,
+        };
+      }
+
+      case 'resolve_product_name': {
+        const branchId = validatedArgs.merchant_branch_id || state.pendingProductMerchantBranchId || state.selectedMerchant?.branchId || null;
+        const resolution = await catalogService.resolveProductName(validatedArgs.product_name, {
+          merchantBranchId: branchId,
+          category: validatedArgs.category || state.pendingProductCategory || null,
+          shadowMode: options?.shadowMode,
+        });
+        state.pendingProductCategory = validatedArgs.category || state.pendingProductCategory || null;
+        state.pendingProductMerchantBranchId = branchId;
+        state.nextRequiredAction = 'RESOLVE_PRODUCT_NAME';
+        state.expectedEntity = 'product_name';
+        if (resolution.matched) state.lastPresentedOptions = [resolution.matched];
+        return {
+          toolName,
+          success: true,
+          result: {
+            stage: resolution.stage,
+            requested_name: resolution.requestedName,
+            matched_product: resolution.matched ? {
+              product_name: resolution.matched.productName,
+              merchant_name: resolution.matched.merchantName,
+              merchant_product_id: resolution.matched.merchantProductId,
+            } : null,
+            spelling_candidates: resolution.spellingCandidates,
+            verified_alternatives: resolution.verifiedAlternatives.map((item) => ({
+              product_name: item.productName,
+              merchant_name: item.merchantName,
+              price: `$${item.basePrice.toFixed(2)}`,
             })),
           },
           stateChanged: true,
@@ -793,6 +860,64 @@ export class AiToolsExecutor {
         };
       }
 
+      case 'capture_delivery_address': {
+        const conversationId = Number(state.conversationId || 0);
+        if (!conversationId) {
+          return { toolName, success: false, error: 'CONVERSATION_ID_REQUIRED_FOR_ADDRESS_DRAFT', errorCode: 'ADDRESS_VALIDATION_FAILED', stateChanged: false };
+        }
+        const draft = await customerService.captureDeliveryAddressDraft(
+          customerId,
+          conversationId,
+          validatedArgs.raw_address,
+          state.lastProcessedMessageId || null,
+        );
+        state.addressDraft = {
+          id: draft.draftId,
+          status: draft.status,
+          area: draft.area || null,
+          summary: draft.safeSummary,
+          saveConsent: 'pending',
+        };
+        state.nextRequiredAction = draft.status === 'serviceable' ? 'CONFIRM_DELIVERY_ADDRESS_DRAFT' : 'PROVIDE_ADDRESS_DETAIL';
+        state.expectedEntity = draft.status === 'serviceable' ? 'address_confirmation' : 'location_or_landmark';
+        if (draft.status !== 'serviceable' || !draft.address) {
+          transitionConversationStage(state, 'ADDRESS_DRAFT_REVIEW');
+          return {
+            toolName,
+            success: false,
+            result: { success: false, address_status: draft.status, safe_summary: draft.safeSummary },
+            error: 'ADDRESS_VALIDATION_FAILED',
+            errorCode: draft.status === 'unserviceable' ? 'ADDRESS_UNSERVICEABLE' : 'ADDRESS_UNVALIDATED',
+            stateChanged: true,
+          };
+        }
+        state.selectedAddress = {
+          id: draft.address.id,
+          label: draft.address.label,
+          formatted: draft.address.formatted_address || draft.address.label,
+          area: draft.address.area_name || undefined,
+        };
+        state.awaitingConfirmation = true;
+        transitionConversationStage(state, 'AWAITING_CONFIRMATION');
+        const summary = await this.refreshCartSummary(customerId, options?.shadowMode, state);
+        state.cartSummary = summary;
+        state.checkoutFingerprint = this.generateCheckoutFingerprint(summary, state.selectedAddress);
+        state.nextRequiredAction = 'CONFIRM_ORDER';
+        state.expectedEntity = 'explicit_confirmation';
+        return {
+          toolName,
+          success: true,
+          result: {
+            address_status: 'serviceable',
+            address_summary: draft.safeSummary,
+            checkout_preview: summary,
+            ready_for_confirmation: true,
+          },
+          cartSummary: summary,
+          stateChanged: true,
+        };
+      }
+
       case 'confirm_and_create_order': {
         const phrase = (userMessage || validatedArgs.confirmation_phrase || '').trim();
 
@@ -1077,6 +1202,65 @@ export class AiToolsExecutor {
           },
           stateChanged: true,
         };
+      }
+
+      case 'create_multi_order_plan': {
+        const active = await cartService.getActiveCartReadOnly(customerId);
+        const selections = (validatedArgs.items || []).map((item: any) => ({
+          merchantProductId: item.merchant_product_id,
+          quantity: item.quantity || 1,
+        }));
+        const batch = await orderBatchService.createOrExtendBatch({
+          customerId,
+          conversationId: state.conversationId || null,
+          sourceCartId: active?.id || null,
+          additionalItems: selections,
+          idempotencyKey: `conversation_batch:${state.conversationId || customerId}:${state.turnIndex || 0}:${selections.map((item: any) => item.merchantProductId).join(',')}`,
+        });
+        state.pendingOrderBatchId = batch.id;
+        state.nextRequiredAction = batch.children.every((child) => child.addressId) ? 'CONFIRM_ORDER_BATCH' : 'SELECT_BATCH_ADDRESS';
+        state.expectedEntity = batch.children.every((child) => child.addressId) ? 'confirm_both_or_child' : 'delivery_address';
+        transitionConversationStage(state, 'MULTI_ORDER_REVIEW');
+        return { toolName, success: true, result: this.batchResult(batch), stateChanged: true };
+      }
+
+      case 'review_multi_order_plan': {
+        if (!state.pendingOrderBatchId) return { toolName, success: false, error: 'NO_PENDING_ORDER_BATCH', errorCode: 'NO_PENDING_ORDER_BATCH', stateChanged: false };
+        const batch = await orderBatchService.getBatchSummary(state.pendingOrderBatchId);
+        return { toolName, success: true, result: this.batchResult(batch), stateChanged: false };
+      }
+
+      case 'set_batch_delivery_address': {
+        if (!state.pendingOrderBatchId) return { toolName, success: false, error: 'NO_PENDING_ORDER_BATCH', errorCode: 'NO_PENDING_ORDER_BATCH', stateChanged: false };
+        const matched = await customerService.resolveAddressByPhrase(customerId, validatedArgs.address_label);
+        if (!matched) return { toolName, success: false, error: 'ADDRESS_NOT_FOUND', errorCode: 'ADDRESS_NOT_FOUND', stateChanged: false };
+        const batch = await orderBatchService.setSharedAddress(state.pendingOrderBatchId, customerId, matched.id);
+        state.nextRequiredAction = 'CONFIRM_ORDER_BATCH';
+        state.expectedEntity = 'confirm_both_or_child';
+        transitionConversationStage(state, 'MULTI_ORDER_REVIEW');
+        return { toolName, success: true, result: this.batchResult(batch), stateChanged: true };
+      }
+
+      case 'cancel_order_batch_child': {
+        if (!state.pendingOrderBatchId) return { toolName, success: false, error: 'NO_PENDING_ORDER_BATCH', errorCode: 'NO_PENDING_ORDER_BATCH', stateChanged: false };
+        const batch = await orderBatchService.cancelChild(state.pendingOrderBatchId, validatedArgs.child_index);
+        return { toolName, success: true, result: this.batchResult(batch), stateChanged: true };
+      }
+
+      case 'confirm_order_batch': {
+        if (!state.pendingOrderBatchId) return { toolName, success: false, error: 'NO_PENDING_ORDER_BATCH', errorCode: 'NO_PENDING_ORDER_BATCH', stateChanged: false };
+        const phrase = String(userMessage || validatedArgs.confirmation_phrase || '').trim().toLowerCase();
+        const inferredSelection = validatedArgs.selection || (phrase.includes('both') ? 'both' : phrase.match(/(?:confirm\s+)?([12])\b/)?.[1]);
+        if (!inferredSelection || !['1', '2', 'both'].includes(inferredSelection) || !this.isExplicitConfirmation(phrase.replace('both', '').replace(/\b[12]\b/g, '').trim() || 'confirm')) {
+          return { toolName, success: false, error: 'EXPLICIT_BATCH_CONFIRMATION_REQUIRED', errorCode: 'EXPLICIT_CONFIRMATION_REQUIRED', stateChanged: false };
+        }
+        const batch = await orderBatchService.confirm(state.pendingOrderBatchId, customerId, inferredSelection as '1' | '2' | 'both', state.conversationId || null);
+        if (batch.status === 'PLACED') {
+          state.nextRequiredAction = null;
+          state.expectedEntity = null;
+          transitionConversationStage(state, 'ORDER_PLACED');
+        }
+        return { toolName, success: true, result: this.batchResult(batch), stateChanged: true };
       }
 
       case 'get_order_status': {

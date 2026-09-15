@@ -30,6 +30,8 @@ export interface TelemetryRecordInput {
   humanHandoff?: boolean;
   executionMode?: 'LIVE' | 'SHADOW' | 'CANARY' | 'DETERMINISTIC';
   requestId?: string | null;
+  inboundMessageId?: number | null;
+  turnCorrelationId?: string | null;
 }
 
 export class AiTelemetryService {
@@ -52,6 +54,8 @@ export class AiTelemetryService {
         human_handoff: Boolean(data.humanHandoff),
         execution_mode: data.executionMode || 'LIVE',
         request_id: data.requestId || null,
+        inbound_message_id: data.inboundMessageId || null,
+        turn_correlation_id: data.turnCorrelationId || data.requestId || null,
         error_message: data.errorMessage || null,
         state_before: data.stateBefore ? PiiRedactor.redactObject(data.stateBefore) : null,
         state_after: data.stateAfter ? PiiRedactor.redactObject(data.stateAfter) : null,

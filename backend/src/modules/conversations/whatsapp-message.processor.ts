@@ -1,4 +1,5 @@
 import { aiService, AIProcessResult } from '../ai/ai.service.js';
+import { sanitizeCustomerOutput } from '../ai/customer-output.js';
 import { mediaService } from '../media/media.service.js';
 import { broadcastEvent } from '../../services/websocket.js';
 import {
@@ -207,6 +208,7 @@ export async function processInboundWhatsAppMessage(message: any, providerMessag
     : await aiService.processCustomerMessage(normalized.phone, normalized.processedText, normalized.mediaType, {
       conversationId: persisted.conversationId,
       requestId: normalized.providerMessageId,
+      inboundMessageId: persisted.messageId,
     });
 
   if (result.intent === 'SUPPORT_REQUEST') {
@@ -222,7 +224,7 @@ export async function processInboundWhatsAppMessage(message: any, providerMessag
     mediaType: normalized.mediaType,
     mediaUrl: normalized.mediaUrl,
     mediaTranscript: normalized.mediaTranscript,
-    replyText: String(result.replyText || '').trim(),
+    replyText: sanitizeCustomerOutput(result.replyText),
     intent: String(result.intent || 'GENERAL_GREETING'),
     actionTaken: result.actionTaken,
     orderCreated: result.orderCreated,

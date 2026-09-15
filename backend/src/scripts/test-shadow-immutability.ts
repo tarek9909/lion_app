@@ -72,6 +72,8 @@ export async function runShadowImmutabilityTests() {
   const testPhone = '+96170999111';
   const customer = await customerService.findOrCreateByPhone(testPhone);
   const cart = await cartService.getOrCreateActiveCart(customer.id);
+  const seedProductRows = await query<any[]>(`SELECT id FROM merchant_products WHERE is_available = 1 LIMIT 1`);
+  await cartService.addItem(cart.id, Number(seedProductRows[0].id), 1);
 
   // Take baseline snapshot of all critical tables
   const baseline = {
@@ -141,27 +143,22 @@ export async function runShadowImmutabilityTests() {
   state.stage = 'AWAITING_CONFIRMATION';
   state.awaitingConfirmation = true;
   state.selectedAddress = { id: 1, label: 'Home', formatted: 'Home' };
-  const mockSummary = {
-    merchantName: 'Burger House',
-    itemsCount: 2,
-    items: [{ productName: 'Classic Burger', quantity: 2, unitPriceUsd: 8.5, totalPriceUsd: 17.0 }],
-    subtotalUsd: 17.0,
-    deliveryFeeUsd: 1.5,
-    totalUsd: 18.5,
-  };
+  // The confirmation fingerprint must represent the same read-only cart
+  // snapshot that shadow confirmation will re-check.
+  const mockSummary = await aiToolsExecutor.refreshCartSummary(customer.id, true, state);
   state.cartSummary = mockSummary;
   state.checkoutFingerprint = (aiToolsExecutor as any).generateCheckoutFingerprint(mockSummary, state.selectedAddress);
 
   const confirmResult = await aiToolsExecutor.executeTool(
     'confirm_and_create_order',
-    { confirmation_phrase: 'yes confirm' },
+    { confirmation_phrase: 'confirm' },
     customer.id,
     state,
     0,
     { shadowMode: true },
-    'yes confirm'
+    'confirm'
   );
-  assert(confirmResult.success === true, 'Shadow confirm_and_create_order succeeded in simulation');
+  assert(confirmResult.success === true, 'Shadow confirm_and_create_order succeeded in simulation', confirmResult);
   assert(confirmResult.result?.shadowExecution === true, 'Shadow order returned shadowExecution: true');
   assert(confirmResult.result?.simulated_order_number === 'LION-SHADOW-0001', 'Simulated order number returned');
 

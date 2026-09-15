@@ -19,7 +19,7 @@ export class CartService {
       FROM carts c
       LEFT JOIN merchant_branches mb ON mb.id = c.merchant_branch_id
       LEFT JOIN merchants m ON m.id = mb.merchant_id
-      WHERE c.customer_id = ? AND c.status = 'ACTIVE'
+      WHERE c.customer_id = ? AND c.status = 'ACTIVE' AND c.order_batch_id IS NULL
       ORDER BY c.updated_at DESC LIMIT 1
     `, [customerId]);
 
@@ -50,7 +50,7 @@ export class CartService {
       FROM carts c
       LEFT JOIN merchant_branches mb ON mb.id = c.merchant_branch_id
       LEFT JOIN merchants m ON m.id = mb.merchant_id
-      WHERE c.customer_id = ? AND c.status = 'ACTIVE'
+      WHERE c.customer_id = ? AND c.status = 'ACTIVE' AND c.order_batch_id IS NULL
       ORDER BY c.updated_at DESC LIMIT 1
     `, [customerId]);
 
@@ -91,6 +91,45 @@ export class CartService {
       estimated_total: totals.total,
       items,
     };
+  }
+
+  /** Create a separate merchant cart that is owned by a pending order batch. */
+  async createBatchChildCart(customerId: number, orderBatchId: number, merchantBranchId: number): Promise<Cart> {
+    const publicId = uuidv4();
+    const result: any = await execute(
+      `INSERT INTO carts
+        (public_id, customer_id, merchant_branch_id, order_batch_id, status, currency, subtotal, estimated_delivery_fee, estimated_total)
+       VALUES (?, ?, ?, ?, 'ACTIVE', 'USD', 0.00, 0.00, 0.00)`,
+      [publicId, customerId, merchantBranchId, orderBatchId],
+    );
+    return this.getCartById(Number(result.insertId));
+  }
+
+  async getCartById(cartId: number): Promise<Cart> {
+    const rows = await query<any[]>(`
+      SELECT c.*, m.name AS merchant_name
+      FROM carts c
+      LEFT JOIN merchant_branches mb ON mb.id = c.merchant_branch_id
+      LEFT JOIN merchants m ON m.id = mb.merchant_id
+      WHERE c.id = ? LIMIT 1
+    `, [cartId]);
+    if (rows.length === 0) throw new Error(`Cart ${cartId} was not found`);
+    const row = rows[0];
+    const items = await this.getCartItems(cartId);
+    const totals = await this.recalculateCart(cartId);
+    return {
+      id: cartId,
+      public_id: row.public_id,
+      customer_id: Number(row.customer_id),
+      merchant_branch_id: row.merchant_branch_id,
+      merchant_name: row.merchant_name,
+      status: row.status,
+      currency: row.currency || 'USD',
+      subtotal: totals.subtotal,
+      estimated_delivery_fee: totals.deliveryFee,
+      estimated_total: totals.total,
+      items,
+    } as Cart;
   }
 
   async getCartItems(cartId: number): Promise<CartItem[]> {

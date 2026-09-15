@@ -3,6 +3,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../../config/env.js';
 import { MultilingualNormalizer } from './arabic-normalizer.js';
 
+function isTestEnvironment(): boolean {
+  return config.nodeEnv === 'test' || process.env.NODE_ENV === 'test';
+}
+
 export interface SearchResult {
   merchantProductId: number;
   productId: number;
@@ -45,23 +49,49 @@ export interface BasketComparisonResult {
   missingItems: string[];
 }
 
+export interface CatalogSearchOptions {
+  maxBudget?: number | null;
+  preference?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null;
+  shadowMode?: boolean;
+  /** Restrict a modification follow-up to the merchant already in the cart. */
+  merchantBranchId?: number | null;
+}
+
+export type ProductResolutionStage =
+  | 'EXACT_MATCH'
+  | 'ALIAS_MATCH'
+  | 'SPELLING_CANDIDATE'
+  | 'VERIFIED_ALTERNATIVE'
+  | 'NO_MATCH';
+
+export interface ProductResolutionResult {
+  stage: ProductResolutionStage;
+  requestedName: string;
+  matched?: SearchResult;
+  spellingCandidates: string[];
+  verifiedAlternatives: SearchResult[];
+  searchedMerchantBranchId: number | null;
+}
+
 export class CatalogService {
   /**
    * Search across active, open demo merchants within delivery zone (G-023, G-024, G-025)
    */
   async searchProducts(
     rawQuery: string,
-    maxBudgetOrOptions?: number | { maxBudget?: number | null; preference?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null; shadowMode?: boolean } | null,
+    maxBudgetOrOptions?: number | CatalogSearchOptions | null,
     preferenceParam?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null
   ): Promise<SearchResult[]> {
     let maxBudget: number | null = null;
     let preference: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null = null;
     let shadowMode = false;
+    let merchantBranchId: number | null = null;
 
     if (typeof maxBudgetOrOptions === 'object' && maxBudgetOrOptions !== null) {
       maxBudget = maxBudgetOrOptions.maxBudget ?? null;
       preference = maxBudgetOrOptions.preference ?? null;
       shadowMode = maxBudgetOrOptions.shadowMode ?? false;
+      merchantBranchId = maxBudgetOrOptions.merchantBranchId ?? null;
     } else if (typeof maxBudgetOrOptions === 'number') {
       maxBudget = maxBudgetOrOptions;
       preference = preferenceParam ?? null;
@@ -71,7 +101,7 @@ export class CatalogService {
 
     const { normalizedArabic, normalizedArabizi, tokens } = MultilingualNormalizer.normalizeQuery(rawQuery);
     const normalized = rawQuery.toLowerCase().trim();
-    const operatingHoursFilter = config.nodeEnv === 'test'
+    const operatingHoursFilter = isTestEnvironment()
       ? '1 = 1'
       : `(moh.id IS NULL OR (
           moh.is_closed = 0 AND (
@@ -82,6 +112,7 @@ export class CatalogService {
         ))`;
 
     // Fetch active merchant products that are available, from active merchants whose branches are open (G-023)
+    const branchFilter = merchantBranchId ? ' AND mb.id = ?' : '';
     const rows = await query<any[]>(`
       SELECT 
         mp.id as merchantProductId,
@@ -113,9 +144,10 @@ export class CatalogService {
         AND m.accepts_orders = 1 
         AND mb.status = 'ACTIVE'
         AND mb.accepts_orders = 1
+        ${branchFilter}
         AND ${operatingHoursFilter}
       GROUP BY mp.id, p.id, m.id, mb.id, p.canonical_name, p.name_ar, mp.description, p.description, mp.base_price, mp.is_available
-    `);
+    `, merchantBranchId ? [merchantBranchId] : []);
 
     const results: SearchResult[] = [];
 
@@ -264,6 +296,136 @@ export class CatalogService {
   }
 
   /**
+   * Resolve a short follow-up product name without silently substituting an
+   * unavailable product. The caller can use the returned spelling candidates
+   * and verified alternatives to ask the customer what they mean next.
+   */
+  async resolveProductName(
+    requestedName: string,
+    options?: { merchantBranchId?: number | null; category?: string | null; shadowMode?: boolean },
+  ): Promise<ProductResolutionResult> {
+    const cleanName = String(requestedName || '').trim();
+    const merchantBranchId = options?.merchantBranchId ?? null;
+    const direct = await this.searchProducts(cleanName, {
+      merchantBranchId,
+      shadowMode: options?.shadowMode,
+    });
+
+    if (direct.length > 0) {
+      const normalized = cleanName.toLocaleLowerCase().trim();
+      const exact = direct.find((entry) => entry.productName.toLocaleLowerCase() === normalized);
+      return {
+        stage: exact ? 'EXACT_MATCH' : 'ALIAS_MATCH',
+        requestedName: cleanName,
+        matched: exact || direct[0],
+        spellingCandidates: [],
+        verifiedAlternatives: [],
+        searchedMerchantBranchId: merchantBranchId,
+      };
+    }
+
+    const spellingCandidates = this.getSpellingCandidates(cleanName);
+    for (const candidate of spellingCandidates) {
+      const matches = await this.searchProducts(candidate, {
+        merchantBranchId,
+        shadowMode: options?.shadowMode,
+      });
+      if (matches.length > 0) {
+        return {
+          stage: 'SPELLING_CANDIDATE',
+          requestedName: cleanName,
+          matched: matches[0],
+          spellingCandidates,
+          verifiedAlternatives: [],
+          searchedMerchantBranchId: merchantBranchId,
+        };
+      }
+    }
+
+    const verifiedAlternatives = await this.getVerifiedAlternatives(
+      merchantBranchId,
+      options?.category || null,
+    );
+    return {
+      stage: verifiedAlternatives.length > 0 ? 'VERIFIED_ALTERNATIVE' : 'NO_MATCH',
+      requestedName: cleanName,
+      spellingCandidates,
+      verifiedAlternatives,
+      searchedMerchantBranchId: merchantBranchId,
+    };
+  }
+
+  private getSpellingCandidates(rawName: string): string[] {
+    const normalized = String(rawName || '').normalize('NFKC').toLocaleLowerCase().trim();
+    const candidateMap: Record<string, string[]> = {
+      kinza: ['kenza'],
+      kenza: ['kinza'],
+      kenze: ['kenza'],
+      kenzaa: ['kenza'],
+      'كينزا': ['كنزا'],
+      'كنزا': ['كينزا'],
+      pepsi: ['بيبسي'],
+      'بيبسي': ['pepsi'],
+    };
+    return [...new Set(candidateMap[normalized] || [])];
+  }
+
+  private async getVerifiedAlternatives(
+    merchantBranchId: number | null,
+    category: string | null,
+  ): Promise<SearchResult[]> {
+    if (!merchantBranchId || !category) return [];
+    const categoryQuery = category.toLocaleLowerCase().includes('drink') || category.toLocaleLowerCase().includes('beverage')
+      ? ['beverages', 'drinks']
+      : [category.toLocaleLowerCase()];
+    const rows = await query<any[]>(`
+      SELECT
+        mp.id AS merchantProductId,
+        p.id AS productId,
+        m.id AS merchantId,
+        mb.id AS merchantBranchId,
+        m.name AS merchantName,
+        m.merchant_type AS merchantType,
+        m.rating AS merchantRating,
+        p.canonical_name AS productName,
+        COALESCE(mp.description, p.description, '') AS description,
+        mp.base_price AS basePrice,
+        COALESCE(mbz.delivery_fee_override, dz.base_delivery_fee, 0) AS deliveryFee,
+        COALESCE(mb.preparation_minutes, m.default_preparation_minutes, 20) + 15 AS estimatedMinutes
+      FROM merchant_products mp
+      JOIN products p ON p.id = mp.product_id
+      JOIN categories c ON c.id = p.category_id
+      JOIN merchant_branches mb ON mb.id = mp.merchant_branch_id
+      JOIN merchants m ON m.id = mb.merchant_id
+      LEFT JOIN merchant_branch_delivery_zones mbz ON mbz.merchant_branch_id = mb.id
+      LEFT JOIN delivery_zones dz ON dz.id = mbz.delivery_zone_id
+      WHERE mp.merchant_branch_id = ?
+        AND mp.status = 'ACTIVE' AND mp.is_available = 1
+        AND m.status = 'ACTIVE' AND m.accepts_orders = 1
+        AND mb.status = 'ACTIVE' AND mb.accepts_orders = 1
+        AND LOWER(c.slug) IN (${categoryQuery.map(() => '?').join(', ')})
+      ORDER BY mp.base_price ASC, mp.id ASC
+      LIMIT 5
+    `, [merchantBranchId, ...categoryQuery]);
+    return rows.map((row) => ({
+      merchantProductId: Number(row.merchantProductId),
+      productId: Number(row.productId),
+      merchantId: Number(row.merchantId),
+      merchantBranchId: Number(row.merchantBranchId),
+      merchantName: String(row.merchantName),
+      merchantType: String(row.merchantType),
+      merchantRating: Number(row.merchantRating || 0),
+      productName: String(row.productName),
+      description: String(row.description || ''),
+      basePrice: Number(row.basePrice),
+      deliveryFee: Number(row.deliveryFee || 0),
+      estimatedMinutes: Number(row.estimatedMinutes || 0),
+      isAvailable: true,
+      score: 0,
+    }));
+  }
+
+  /**
    * Supermarket whole-basket comparison (G-026, G-027)
    */
   async compareBasket(
@@ -281,7 +443,7 @@ export class CatalogService {
         AND m.accepts_orders = 1
         AND mb.status = 'ACTIVE'
         AND mb.accepts_orders = 1
-         AND ${config.nodeEnv === 'test' ? '1 = 1' : `(moh.id IS NULL OR (
+         AND ${isTestEnvironment() ? '1 = 1' : `(moh.id IS NULL OR (
            moh.is_closed = 0 AND (
              moh.open_time IS NULL OR moh.close_time IS NULL OR
              (moh.open_time <= moh.close_time AND CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time) OR
@@ -363,13 +525,13 @@ export class CatalogService {
         AND m.accepts_orders = 1
         AND mb.status = 'ACTIVE'
         AND mb.accepts_orders = 1
-         AND (moh.id IS NULL OR (
+         AND ${isTestEnvironment() ? '1 = 1' : `(moh.id IS NULL OR (
            moh.is_closed = 0 AND (
              moh.open_time IS NULL OR moh.close_time IS NULL OR
              (moh.open_time <= moh.close_time AND CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time) OR
              (moh.open_time > moh.close_time AND (CURRENT_TIME() >= moh.open_time OR CURRENT_TIME() <= moh.close_time))
            )
-         ))
+         ))`}
       ORDER BY m.rating DESC
     `);
   }
@@ -398,13 +560,13 @@ export class CatalogService {
         AND m.accepts_orders = 1
         AND mb.status = 'ACTIVE'
         AND mb.accepts_orders = 1
-         AND (moh.id IS NULL OR (
+         AND ${isTestEnvironment() ? '1 = 1' : `(moh.id IS NULL OR (
            moh.is_closed = 0 AND (
              moh.open_time IS NULL OR moh.close_time IS NULL OR
              (moh.open_time <= moh.close_time AND CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time) OR
              (moh.open_time > moh.close_time AND (CURRENT_TIME() >= moh.open_time OR CURRENT_TIME() <= moh.close_time))
            )
-         ))
+         ))`}
       ORDER BY m.name, p.canonical_name
     `);
   }

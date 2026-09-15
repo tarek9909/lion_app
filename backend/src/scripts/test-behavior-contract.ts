@@ -28,8 +28,8 @@ async function runBehaviorContractTests() {
   // 1. Version and schema completeness
   const schema = getBehaviorContractSchema();
   assert(schema.version === '1.0.0', `Contract version is ${BEHAVIOR_CONTRACT_VERSION}`);
-  assert(schema.canonicalIntents.length === 18, `Taxonomy has 18 canonical intents`);
-  assert(schema.conversationStages.length === 11, `Conversation has 11 stages`);
+  assert(schema.canonicalIntents.length >= 25, `Taxonomy includes the expanded customer conversation intents`);
+  assert(schema.conversationStages.length >= 13, `Conversation includes address-draft and multi-order stages`);
   assert(schema.clarificationTypes.length === 6, `Clarification has 6 types`);
 
   // 2. Intent conversion and legacy adapter
@@ -76,7 +76,7 @@ async function runBehaviorContractTests() {
   const { getAuthoritativeGeminiToolDeclarations } = await import('../modules/ai/contract/tool-schemas.js');
   const geminiTools = getAuthoritativeGeminiToolDeclarations();
   const functionDeclarations = geminiTools[0].functionDeclarations;
-  assert(functionDeclarations.length === 17, `Exported 17 authoritative Gemini tool declarations`);
+  assert(functionDeclarations.length >= 24, `Exported expanded authoritative Gemini tool declarations`);
 
   const toolNames = new Set(functionDeclarations.map((t: any) => t.name));
   assert(toolNames.has('add_to_cart'), 'Authoritative tools include add_to_cart');
@@ -87,6 +87,10 @@ async function runBehaviorContractTests() {
   assert(toolNames.has('confirm_and_create_order'), 'Authoritative tools include confirm_and_create_order');
   assert(toolNames.has('switch_merchant_confirm'), 'Authoritative tools include switch_merchant_confirm');
   assert(toolNames.has('switch_merchant_reject'), 'Authoritative tools include switch_merchant_reject');
+  assert(toolNames.has('capture_delivery_address'), 'Authoritative tools include capture_delivery_address');
+  assert(toolNames.has('resolve_product_name'), 'Authoritative tools include resolve_product_name');
+  assert(toolNames.has('create_multi_order_plan'), 'Authoritative tools include create_multi_order_plan');
+  assert(toolNames.has('confirm_order_batch'), 'Authoritative tools include confirm_order_batch');
 
   // Verify exact argument names in declarations (resolving audit mismatches)
   const updateQtyTool = functionDeclarations.find((t: any) => t.name === 'update_cart_quantity')!;

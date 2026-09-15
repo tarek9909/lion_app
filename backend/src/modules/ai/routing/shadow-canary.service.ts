@@ -11,6 +11,8 @@ export interface RoutingConfig {
   candidateProvider: 'smart_nlu' | 'gemini';
   routingMode: RoutingMode;
   canaryPercentage: number; // 0 to 100
+  candidateModelEndpoint?: string;
+  stableModelEndpoint?: string;
 }
 
 export interface ProviderProcessOptions {
@@ -18,6 +20,7 @@ export interface ProviderProcessOptions {
   canary?: boolean;
   requestId?: string;
   conversationId?: number;
+  modelEndpoint?: string;
 }
 
 export class ShadowCanaryRouter {
@@ -114,7 +117,11 @@ export class ShadowCanaryRouter {
 
       const result =
         candidateProvider === 'gemini'
-          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, { ...providerOptions, canary: true })
+          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, {
+              ...providerOptions,
+              canary: true,
+              modelEndpoint: this.config.candidateModelEndpoint,
+            })
           : stableProcessor
           ? await stableProcessor(phone, messageText, mediaType, providerOptions)
           : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
@@ -126,7 +133,10 @@ export class ShadowCanaryRouter {
     if (effectiveRoutingMode === 'CANDIDATE_ONLY') {
       const result =
         candidateProvider === 'gemini'
-          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions)
+          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, {
+              ...providerOptions,
+              modelEndpoint: this.config.candidateModelEndpoint,
+            })
           : stableProcessor
           ? await stableProcessor(phone, messageText, mediaType, providerOptions)
           : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
@@ -139,7 +149,10 @@ export class ShadowCanaryRouter {
     if (effectiveRoutingMode === 'STABLE_ONLY' || !stableProcessor) {
       const result =
         stableProvider === 'gemini'
-          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions)
+          ? await geminiService.processCustomerMessage(phone, messageText, mediaType, {
+              ...providerOptions,
+              modelEndpoint: this.config.stableModelEndpoint,
+            })
           : stableProcessor
           ? await stableProcessor(phone, messageText, mediaType, providerOptions)
           : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
@@ -151,7 +164,10 @@ export class ShadowCanaryRouter {
     // Step A: Run stable provider to serve the live customer immediately
     const liveResult =
       stableProvider === 'gemini'
-        ? await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions)
+        ? await geminiService.processCustomerMessage(phone, messageText, mediaType, {
+            ...providerOptions,
+            modelEndpoint: this.config.stableModelEndpoint,
+          })
         : await stableProcessor(phone, messageText, mediaType, providerOptions);
 
     // Step B: Run candidate in mutation-disabled shadow mode asynchronously
@@ -161,7 +177,7 @@ export class ShadowCanaryRouter {
     } else {
       try {
         shadowRan = true;
-        this.executeShadowAsync(phone, messageText, mediaType, liveResult, requestId, options?.conversationId).catch((err) => {
+        this.executeShadow(phone, messageText, mediaType, liveResult, requestId, options?.conversationId).catch((err) => {
           console.warn('[AI Router] Shadow execution error:', err?.message || err);
         });
       } catch (err) {
@@ -173,18 +189,18 @@ export class ShadowCanaryRouter {
   }
 
   /**
-   * Asynchronous mutation-disabled shadow execution.
+   * Mutation-disabled shadow execution.
    * Runs the actual candidate planner with shadowMode: true to prevent any DB or Redis mutations,
    * suppresses outbound WhatsApp messaging, and records comparison telemetry.
    */
-  private async executeShadowAsync(
+  async executeShadow(
     phone: string,
     messageText: string,
     mediaType: any,
     liveResult: AIProcessResult,
     requestId: string,
     conversationId?: number
-  ): Promise<void> {
+  ): Promise<AIProcessResult | null> {
     const startTime = Date.now();
     try {
       let candidateResult: AIProcessResult | null = null;
@@ -193,6 +209,7 @@ export class ShadowCanaryRouter {
           shadowMode: true,
           requestId,
           conversationId,
+          modelEndpoint: this.config.candidateModelEndpoint,
         });
       }
 
@@ -200,7 +217,7 @@ export class ShadowCanaryRouter {
         await aiTelemetryService.recordInteraction({
           aiContext: 'CUSTOMER_WHATSAPP',
           provider: 'shadow-router',
-          model: 'shadow-' + this.config.candidateProvider,
+          model: this.config.candidateModelEndpoint || ('shadow-' + this.config.candidateProvider),
           interactionType: 'CHAT_TURN',
           rawInput: messageText,
           rawOutput: candidateResult.replyText || '',
@@ -239,6 +256,7 @@ export class ShadowCanaryRouter {
           });
         }
       }
+      return candidateResult;
     } catch (err: any) {
       console.warn('[AI Router] Shadow candidate execution failed:', err?.message || err);
       await aiTelemetryService.recordInteraction({
@@ -257,6 +275,7 @@ export class ShadowCanaryRouter {
         requestId,
         conversationId,
       });
+      return null;
     }
   }
 }

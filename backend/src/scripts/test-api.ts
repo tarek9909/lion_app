@@ -2,6 +2,8 @@ import http from 'http';
 import { app } from '../app.js';
 import { resetDemo } from './reset-demo.js';
 import { execute } from '../database/db.js';
+import { geminiService } from '../modules/ai/gemini.service.js';
+import { config } from '../config/env.js';
 
 export async function runApiTests(): Promise<boolean> {
   console.log('\n🧪 Starting Lion Delivery HTTP API Integration Tests (Step 9 & 10)...');
@@ -292,7 +294,21 @@ export async function runApiTests(): Promise<boolean> {
       'POST /api/orders/:id/driver-reject triggers driver reassignment workflow (G-058)'
     );
 
-    // 13. WhatsApp Simulator Endpoint
+    // 13. WhatsApp Simulator Endpoint. Customer behavior is Gemini-only, so
+    // use a local Gemini function-call fixture rather than a Smart NLU fallback.
+    const originalGeminiKey = config.ai.geminiApiKey;
+    config.ai.geminiApiKey = 'test_api_gemini_key';
+    let geminiRound = 0;
+    geminiService.setFetchFn(async () => {
+      geminiRound += 1;
+      const part = geminiRound === 1
+        ? { functionCall: { name: 'search_catalog', args: { query: 'crispy chicken', max_budget: 15 } } }
+        : { text: 'La2et 3a Crispy Chicken options la elak.' };
+      return new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [part] } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
     const simRes = await fetch(`${baseUrl}/api/conversations/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -305,6 +321,8 @@ export async function runApiTests(): Promise<boolean> {
       simData.data?.replyText?.includes('Crispy Chicken'),
       'POST /api/conversations/message processes conversational AI query with state persistence'
     );
+    geminiService.resetFetchFn();
+    config.ai.geminiApiKey = originalGeminiKey;
 
   } finally {
     server.close();
