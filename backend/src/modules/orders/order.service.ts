@@ -261,6 +261,7 @@ export class OrderService {
         m.name as merchant_name,
         d.display_code as driver_code,
         d.full_name_private as driver_name,
+        d.whatsapp_number as driver_whatsapp_number,
         ca.label as address_label,
         ca.formatted_address,
         ca.delivery_notes
@@ -268,7 +269,7 @@ export class OrderService {
       JOIN customers c ON c.id = o.customer_id
       JOIN merchants m ON m.id = o.merchant_id
       LEFT JOIN drivers d ON d.id = o.driver_id
-      JOIN customer_addresses ca ON ca.id = o.customer_address_id
+      LEFT JOIN customer_addresses ca ON ca.id = o.customer_address_id
       WHERE o.id = ? LIMIT 1
     `, [orderId]);
 
@@ -296,6 +297,7 @@ export class OrderService {
       driver_id: o.driver_id,
       driver_name: o.driver_name,
       driver_code: o.driver_code,
+      driver_whatsapp_number: o.driver_whatsapp_number,
       customer_address_id: o.customer_address_id,
       address_label: o.address_label,
       formatted_address: o.formatted_address,
@@ -331,13 +333,14 @@ export class OrderService {
         m.name as merchant_name,
         d.display_code as driver_code,
         d.full_name_private as driver_name,
+        d.whatsapp_number as driver_whatsapp_number,
         ca.label as address_label,
         ca.formatted_address
       FROM orders o
       JOIN customers c ON c.id = o.customer_id
       JOIN merchants m ON m.id = o.merchant_id
       LEFT JOIN drivers d ON d.id = o.driver_id
-      JOIN customer_addresses ca ON ca.id = o.customer_address_id
+      LEFT JOIN customer_addresses ca ON ca.id = o.customer_address_id
       ORDER BY o.created_at DESC
       LIMIT 50
     `);

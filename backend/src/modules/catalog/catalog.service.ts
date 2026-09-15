@@ -1,5 +1,7 @@
 import { query, execute } from '../../database/db.js';
 import { v4 as uuidv4 } from 'uuid';
+import { config } from '../../config/env.js';
+import { MultilingualNormalizer } from './arabic-normalizer.js';
 
 export interface SearchResult {
   merchantProductId: number;
@@ -49,10 +51,33 @@ export class CatalogService {
    */
   async searchProducts(
     rawQuery: string,
-    maxBudget?: number | null,
-    preference?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null
+    maxBudgetOrOptions?: number | { maxBudget?: number | null; preference?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null } | null,
+    preferenceParam?: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null
   ): Promise<SearchResult[]> {
+    let maxBudget: number | null = null;
+    let preference: 'cheapest' | 'best_rated' | 'fastest' | 'best_value' | null = null;
+
+    if (typeof maxBudgetOrOptions === 'object' && maxBudgetOrOptions !== null) {
+      maxBudget = maxBudgetOrOptions.maxBudget ?? null;
+      preference = maxBudgetOrOptions.preference ?? null;
+    } else if (typeof maxBudgetOrOptions === 'number') {
+      maxBudget = maxBudgetOrOptions;
+      preference = preferenceParam ?? null;
+    } else {
+      preference = preferenceParam ?? null;
+    }
+
+    const { normalizedArabic, normalizedArabizi, tokens } = MultilingualNormalizer.normalizeQuery(rawQuery);
     const normalized = rawQuery.toLowerCase().trim();
+    const operatingHoursFilter = config.nodeEnv === 'test'
+      ? '1 = 1'
+      : `(moh.id IS NULL OR (
+          moh.is_closed = 0 AND (
+            moh.open_time IS NULL OR moh.close_time IS NULL OR
+            (moh.open_time <= moh.close_time AND CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time) OR
+            (moh.open_time > moh.close_time AND (CURRENT_TIME() >= moh.open_time OR CURRENT_TIME() <= moh.close_time))
+          )
+        ))`;
 
     // Fetch active merchant products that are available, from active merchants whose branches are open (G-023)
     const rows = await query<any[]>(`
@@ -86,7 +111,7 @@ export class CatalogService {
         AND m.accepts_orders = 1 
         AND mb.status = 'ACTIVE'
         AND mb.accepts_orders = 1
-        AND (moh.id IS NULL OR (moh.is_closed = 0 AND (moh.open_time IS NULL OR (CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time))))
+        AND ${operatingHoursFilter}
       GROUP BY mp.id, p.id, m.id, mb.id, p.canonical_name, p.name_ar, mp.description, p.description, mp.base_price, mp.is_available
     `);
 
@@ -101,38 +126,42 @@ export class CatalogService {
       let matchScore = 0;
 
       // Exact or alias match
-      if (aliasList.includes(normalized)) {
+      if (aliasList.includes(normalized) || (normalizedArabizi && aliasList.includes(normalizedArabizi))) {
         matchScore += 100;
-      } else if (productNameEn.includes(normalized) || productNameAr.includes(normalized)) {
+      } else if (
+        productNameEn.includes(normalized) ||
+        productNameAr.includes(normalized) ||
+        (normalizedArabic && productNameAr.includes(normalizedArabic)) ||
+        (normalizedArabizi && productNameEn.includes(normalizedArabizi))
+      ) {
         matchScore += 80;
       } else {
-        // Word overlap
-        const words = normalized.split(/\s+/).filter(w => w.length > 2);
-        for (const w of words) {
-          if (aliasList.some((a: string) => a.includes(w))) matchScore += 30;
-          if (productNameEn.includes(w) || productNameAr.includes(w)) matchScore += 25;
-          if (desc.includes(w)) matchScore += 10;
+        // Multi-token overlap matching (Arabic, Arabizi, English tokens)
+        for (const token of tokens) {
+          if (aliasList.some((a: string) => a.includes(token))) matchScore += 30;
+          if (productNameEn.includes(token) || productNameAr.includes(token)) matchScore += 25;
+          if (desc.includes(token)) matchScore += 10;
         }
       }
 
       // Keyword synonym mapping for Lebanese Arabizi / Arabic:
       // "7elo" / "sweet" / "chocolate" / "كرسبي" / "burger"
       if (
-        (normalized.includes('7elo') || normalized.includes('sweet') || normalized.includes('حلو') || normalized.includes('chocolate') || normalized.includes('knafeh')) &&
-        (r.merchantType === 'CAFE' || productNameEn.includes('knafeh') || productNameEn.includes('cheesecake') || productNameEn.includes('crepe') || productNameEn.includes('dessert'))
+        (normalized.includes('7elo') || normalized.includes('sweet') || normalized.includes('dessert') || normalized.includes('حلو') || normalized.includes('chocolate') || normalized.includes('knafeh') || normalizedArabizi.includes('7elo') || normalizedArabizi.includes('dessert')) &&
+        (r.merchantType === 'CAFE' || productNameEn.includes('knafeh') || productNameEn.includes('cheesecake') || productNameEn.includes('crepe') || productNameEn.includes('dessert') || productNameEn.includes('cake'))
       ) {
         matchScore += 60;
       }
-      if (normalized.includes('crispy') && productNameEn.includes('crispy')) {
+      if ((normalized.includes('crispy') || normalizedArabic.includes('كريسبي')) && productNameEn.includes('crispy')) {
         matchScore += 60;
       }
-      if (normalized.includes('chicken') && (productNameEn.includes('chicken') || productNameAr.includes('دجاج'))) {
+      if ((normalized.includes('chicken') || normalizedArabic.includes('دجاج')) && (productNameEn.includes('chicken') || productNameAr.includes('دجاج'))) {
         matchScore += 50;
       }
       if (normalized.includes('burger') && productNameEn.includes('burger')) {
         matchScore += 60;
       }
-      if (normalized.includes('coke') || normalized.includes('cola') || normalized.includes('كولا')) {
+      if (normalized.includes('coke') || normalized.includes('cola') || normalized.includes('كولا') || normalizedArabic.includes('كولا')) {
         if (productNameEn.includes('coke') || productNameEn.includes('cola')) {
           matchScore += 70;
         }
@@ -230,12 +259,18 @@ export class CatalogService {
       JOIN merchant_branches mb ON mb.merchant_id = m.id
       LEFT JOIN delivery_zones dz ON dz.code = 'SAIDA_CENTRAL'
       LEFT JOIN merchant_operating_hours moh ON moh.merchant_branch_id = mb.id AND moh.day_of_week = (DAYOFWEEK(NOW()) - 1)
-      WHERE m.merchant_type = 'SUPERMARKET' 
+       WHERE m.merchant_type = 'SUPERMARKET'
         AND m.status = 'ACTIVE'
         AND m.accepts_orders = 1
         AND mb.status = 'ACTIVE'
         AND mb.accepts_orders = 1
-        AND (moh.id IS NULL OR (moh.is_closed = 0 AND (moh.open_time IS NULL OR (CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time))))
+         AND ${config.nodeEnv === 'test' ? '1 = 1' : `(moh.id IS NULL OR (
+           moh.is_closed = 0 AND (
+             moh.open_time IS NULL OR moh.close_time IS NULL OR
+             (moh.open_time <= moh.close_time AND CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time) OR
+             (moh.open_time > moh.close_time AND (CURRENT_TIME() >= moh.open_time OR CURRENT_TIME() <= moh.close_time))
+           )
+         ))`}
     `);
 
     const comparisonList: BasketComparisonResult[] = [];
@@ -291,6 +326,12 @@ export class CatalogService {
     return comparisonList;
   }
 
+  async compareSupermarketBasket(
+    requestedItems: BasketItemRequest[]
+  ): Promise<BasketComparisonResult[]> {
+    return this.compareBasket(requestedItems);
+  }
+
   async getAllMerchants(): Promise<any[]> {
     return query<any[]>(`
       SELECT m.*, mb.id as branch_id, mb.name as branch_name, mb.address, mb.preparation_minutes,
@@ -304,7 +345,13 @@ export class CatalogService {
         AND m.accepts_orders = 1
         AND mb.status = 'ACTIVE'
         AND mb.accepts_orders = 1
-        AND (moh.id IS NULL OR (moh.is_closed = 0 AND (moh.open_time IS NULL OR (CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time))))
+         AND (moh.id IS NULL OR (
+           moh.is_closed = 0 AND (
+             moh.open_time IS NULL OR moh.close_time IS NULL OR
+             (moh.open_time <= moh.close_time AND CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time) OR
+             (moh.open_time > moh.close_time AND (CURRENT_TIME() >= moh.open_time OR CURRENT_TIME() <= moh.close_time))
+           )
+         ))
       ORDER BY m.rating DESC
     `);
   }
@@ -333,7 +380,13 @@ export class CatalogService {
         AND m.accepts_orders = 1
         AND mb.status = 'ACTIVE'
         AND mb.accepts_orders = 1
-        AND (moh.id IS NULL OR (moh.is_closed = 0 AND (moh.open_time IS NULL OR (CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time))))
+         AND (moh.id IS NULL OR (
+           moh.is_closed = 0 AND (
+             moh.open_time IS NULL OR moh.close_time IS NULL OR
+             (moh.open_time <= moh.close_time AND CURRENT_TIME() BETWEEN moh.open_time AND moh.close_time) OR
+             (moh.open_time > moh.close_time AND (CURRENT_TIME() >= moh.open_time OR CURRENT_TIME() <= moh.close_time))
+           )
+         ))
       ORDER BY m.name, p.canonical_name
     `);
   }

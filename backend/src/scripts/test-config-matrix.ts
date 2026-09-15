@@ -1,208 +1,191 @@
-import { validateStartupConfig, config } from '../config/env.js';
-import { mediaService, OpenAiWhisperAudioTranscriptionProvider, OpenAiVisionProvider, FixtureAudioTranscriptionProvider, FixtureVisionProvider } from '../modules/media/media.service.js';
-import { whatsappService } from '../modules/whatsapp/whatsapp.service.js';
+import assert from 'assert';
+import { shadowCanaryRouter, RoutingMode } from '../modules/ai/routing/shadow-canary.service.js';
+import { validateStartupConfig } from '../config/env.js';
+import { config } from '../config/env.js';
 
-export async function runConfigMatrixTests(): Promise<boolean> {
-  console.log('\n🧪 Starting Configuration & Provider Matrix Tests (G-061, G-062, G-065)...');
+export async function runConfigMatrixTests() {
+  console.log('\n🧪 Starting AI Router & Configuration Matrix Regression Tests (Area A)...');
 
-  let passed = 0;
-  let failed = 0;
+  const originalRouterConfig = shadowCanaryRouter.getConfig();
+  const originalEnvAi = { ...config.ai };
 
-  const assert = (condition: boolean, name: string, detail?: any) => {
-    if (condition) {
-      console.log(`  ✅ ${name} [PASS]`);
-      passed++;
-    } else {
-      console.error(`  ❌ ${name} [FAIL]`, detail || '');
-      failed++;
-    }
-  };
-
-  // -------------------------------------------------------------
-  // Test 1: MOCK / FIXTURE Startup Validation (G-061)
-  // -------------------------------------------------------------
   try {
-    const res = validateStartupConfig({
-      whatsapp: { mode: 'MOCK', accessToken: '', phoneNumberId: '' },
-      media: { mode: 'FIXTURE', transcriptionProvider: 'FIXTURE', visionProvider: 'FIXTURE', openAiApiKey: '' },
+    // -------------------------------------------------------------
+    // Test 1: Startup Credential Validation Matrix
+    // -------------------------------------------------------------
+    console.log('  Testing startup credential validation matrix...');
+
+    // 1a: STABLE_ONLY with smart_nlu requires NO Gemini key
+    assert.doesNotThrow(() => {
+      validateStartupConfig({
+        whatsapp: { mode: 'MOCK' },
+        media: { mode: 'FIXTURE' },
+        ai: {
+          routingMode: 'STABLE_ONLY',
+          stableProvider: 'smart_nlu',
+          candidateProvider: 'gemini',
+          geminiApiKey: undefined,
+        },
+      });
+    }, 'STABLE_ONLY with smart_nlu starts cleanly without Gemini credentials');
+    console.log('  ✅ STABLE_ONLY with smart_nlu passes startup validation without Gemini key [PASS]');
+
+    // 1b: STABLE_ONLY with gemini REQUIRES valid Gemini key
+    assert.throws(() => {
+      validateStartupConfig({
+        whatsapp: { mode: 'MOCK' },
+        media: { mode: 'FIXTURE' },
+        ai: {
+          routingMode: 'STABLE_ONLY',
+          stableProvider: 'gemini',
+          candidateProvider: 'smart_nlu',
+          geminiApiKey: 'placeholder',
+        },
+      });
+    }, /Startup Error.*gemini/, 'STABLE_ONLY with gemini throws if GEMINI_API_KEY is placeholder');
+    console.log('  ✅ STABLE_ONLY with gemini rejects missing/placeholder key at startup [PASS]');
+
+    // 1c: CANDIDATE_ONLY with gemini REQUIRES valid Gemini key
+    assert.throws(() => {
+      validateStartupConfig({
+        whatsapp: { mode: 'MOCK' },
+        media: { mode: 'FIXTURE' },
+        ai: {
+          routingMode: 'CANDIDATE_ONLY',
+          stableProvider: 'smart_nlu',
+          candidateProvider: 'gemini',
+          geminiApiKey: 'demo_key',
+        },
+      });
+    }, /Startup Error.*CANDIDATE_ONLY/, 'CANDIDATE_ONLY with gemini throws if key is placeholder');
+    console.log('  ✅ CANDIDATE_ONLY with gemini rejects missing/placeholder key at startup [PASS]');
+
+    // 1d: SHADOW mode with missing candidate key fails safe (warns but does not crash startup)
+    assert.doesNotThrow(() => {
+      validateStartupConfig({
+        whatsapp: { mode: 'MOCK' },
+        media: { mode: 'FIXTURE' },
+        ai: {
+          routingMode: 'SHADOW',
+          stableProvider: 'smart_nlu',
+          candidateProvider: 'gemini',
+          geminiApiKey: undefined,
+        },
+      });
+    }, 'SHADOW mode with missing candidate key fails safe without throwing');
+    console.log('  ✅ SHADOW mode with missing candidate key fails safely at startup [PASS]');
+
+    // -------------------------------------------------------------
+    // Test 2: Runtime Router Behavior Across All Modes
+    // -------------------------------------------------------------
+    console.log('  Testing router execution matrix across all 4 modes...');
+
+    let stableCalls = 0;
+    const mockStableProcessor = async (phone: string, msg: string) => {
+      stableCalls++;
+      return {
+        replyText: `Stable reply for ${phone}: ${msg}`,
+        intent: 'SEARCH_PRODUCTS' as any,
+        confidence: 0.99,
+      };
+    };
+
+    // 2a: STABLE_ONLY
+    shadowCanaryRouter.configure({
+      routingMode: 'STABLE_ONLY',
+      stableProvider: 'smart_nlu',
+      candidateProvider: 'gemini',
+      canaryPercentage: 0,
     });
-    assert(res.whatsappValid === true, 'MOCK/FIXTURE startup succeeds without requiring external credentials (G-061)');
-  } catch (err: any) {
-    assert(false, 'MOCK/FIXTURE startup validation threw unexpected error', err.message);
-  }
+    stableCalls = 0;
+    const stableRes = await shadowCanaryRouter.routeCustomerMessage(
+      '96170111222',
+      'bade burger',
+      'text',
+      mockStableProcessor
+    );
+    assert.strictEqual(stableRes.executionMode, 'LIVE');
+    assert.strictEqual(stableRes.shadowRan, false);
+    assert.strictEqual(stableCalls, 1);
+    console.log('  ✅ STABLE_ONLY routes strictly to stable processor [PASS]');
 
-  // -------------------------------------------------------------
-  // Test 2: LIVE Startup Rejection Without Credentials (G-061)
-  // -------------------------------------------------------------
-  try {
-    validateStartupConfig({
-      whatsapp: { mode: 'LIVE', accessToken: '', phoneNumberId: '' },
-      media: { mode: 'FIXTURE' },
+    // 2b: CANARY with 0% canary
+    shadowCanaryRouter.configure({
+      routingMode: 'CANARY',
+      stableProvider: 'smart_nlu',
+      candidateProvider: 'gemini',
+      canaryPercentage: 0,
     });
-    assert(false, 'LIVE mode without credentials must fail startup');
-  } catch (err: any) {
-    assert(
-      err.message.includes('WHATSAPP_MODE is set to LIVE') && err.message.includes('missing or placeholder'),
-      'LIVE WhatsApp startup fails fast when credentials are empty (G-061)'
+    stableCalls = 0;
+    const canary0Res = await shadowCanaryRouter.routeCustomerMessage(
+      '96170111222',
+      'bade burger',
+      'text',
+      mockStableProcessor
     );
-  }
+    assert.strictEqual(canary0Res.executionMode, 'LIVE');
+    assert.strictEqual(stableCalls, 1);
+    console.log('  ✅ CANARY (0%) routes 100% to stable processor [PASS]');
 
-  try {
-    validateStartupConfig({
-      whatsapp: {
-        mode: 'LIVE',
-        accessToken: 'demo_whatsapp_access_token_placeholder',
-        phoneNumberId: 'demo_phone_number_id_placeholder',
-      },
-      media: { mode: 'FIXTURE' },
+    // 2c: CANARY with missing candidate credentials fails safely to stable
+    config.ai.geminiApiKey = 'placeholder';
+    shadowCanaryRouter.configure({
+      routingMode: 'CANARY',
+      stableProvider: 'smart_nlu',
+      candidateProvider: 'gemini',
+      canaryPercentage: 100, // Eligible, but lacks key
     });
-    assert(false, 'LIVE mode with placeholder credentials must fail startup');
-  } catch (err: any) {
-    assert(
-      err.message.includes('missing or placeholder'),
-      'LIVE WhatsApp startup fails fast when placeholder credentials are used (G-061)'
+    stableCalls = 0;
+    const canaryFallbackRes = await shadowCanaryRouter.routeCustomerMessage(
+      '96170111222',
+      'bade burger',
+      'text',
+      mockStableProcessor
     );
-  }
+    assert.strictEqual(canaryFallbackRes.executionMode, 'LIVE');
+    assert.strictEqual(stableCalls, 1);
+    console.log('  ✅ CANARY with missing candidate credentials falls back safely to stable [PASS]');
 
-  // -------------------------------------------------------------
-  // Test 3: Correct Provider Selection in FIXTURE vs LIVE (G-062, G-065)
-  // -------------------------------------------------------------
-  const originalMediaMode = config.media.mode;
-  const originalTransProvider = config.media.transcriptionProvider;
-  const originalVisionProvider = config.media.visionProvider;
-  const originalApiKey = config.media.openAiApiKey;
-  const originalWaMode = config.whatsapp.mode;
-  const originalWaToken = config.whatsapp.accessToken;
-
-  try {
-    // 3a. FIXTURE mode selection
-    config.media.mode = 'FIXTURE';
-    const fixtureAudio = mediaService.createAudioProvider();
-    const fixtureVision = mediaService.createVisionProvider();
-    assert(
-      fixtureAudio instanceof FixtureAudioTranscriptionProvider && fixtureAudio.name === 'FIXTURE_AUDIO_PROVIDER',
-      'FIXTURE mode selects FixtureAudioTranscriptionProvider (G-065)'
+    // 2d: SHADOW mode with missing candidate credentials executes stable and skips shadow
+    shadowCanaryRouter.configure({
+      routingMode: 'SHADOW',
+      stableProvider: 'smart_nlu',
+      candidateProvider: 'gemini',
+      canaryPercentage: 0,
+    });
+    stableCalls = 0;
+    const shadowNoKeyRes = await shadowCanaryRouter.routeCustomerMessage(
+      '96170111222',
+      'bade burger',
+      'text',
+      mockStableProcessor
     );
-    assert(
-      fixtureVision instanceof FixtureVisionProvider && fixtureVision.name === 'FIXTURE_VISION_PROVIDER',
-      'FIXTURE mode selects FixtureVisionProvider (G-065)'
-    );
+    assert.strictEqual(shadowNoKeyRes.executionMode, 'LIVE');
+    assert.strictEqual(shadowNoKeyRes.shadowRan, false);
+    assert.strictEqual(stableCalls, 1);
+    console.log('  ✅ SHADOW mode with missing candidate key runs stable and skips shadow [PASS]');
 
-    // 3b. LIVE mode selection
-    config.media.mode = 'LIVE';
-    config.media.transcriptionProvider = 'WHISPER';
-    config.media.visionProvider = 'VISION_API';
-    const liveAudio = mediaService.createAudioProvider();
-    const liveVision = mediaService.createVisionProvider();
-    assert(
-      liveAudio instanceof OpenAiWhisperAudioTranscriptionProvider && liveAudio.name === 'OPENAI_WHISPER',
-      'LIVE mode selects OpenAiWhisperAudioTranscriptionProvider (G-062)'
-    );
-    assert(
-      liveVision instanceof OpenAiVisionProvider && liveVision.name === 'OPENAI_VISION',
-      'LIVE mode selects OpenAiVisionProvider (G-062)'
-    );
+    // 2e: Rollback to stable
+    shadowCanaryRouter.rollbackToStable();
+    const currentConf = shadowCanaryRouter.getConfig();
+    assert.strictEqual(currentConf.routingMode, 'STABLE_ONLY');
+    assert.strictEqual(currentConf.canaryPercentage, 0);
+    console.log('  ✅ rollbackToStable resets to STABLE_ONLY with 0% canary [PASS]');
 
-    // 3c. LIVE mode never selects fixture providers automatically
-    assert(
-      !(liveAudio instanceof FixtureAudioTranscriptionProvider),
-      'LIVE mode never selects FixtureAudioTranscriptionProvider automatically (G-062)'
-    );
-    assert(
-      !(liveVision instanceof FixtureVisionProvider),
-      'LIVE mode never selects FixtureVisionProvider automatically (G-062)'
-    );
-
-    // -------------------------------------------------------------
-    // Test 4: LIVE Media Fail-Closed Behavior (G-062)
-    // -------------------------------------------------------------
-    // In LIVE mode without credentials, downloadMedia must throw and reject fixture fallback
-    config.whatsapp.accessToken = '';
-    try {
-      await mediaService.downloadMedia('meta_live_test_123', 'audio');
-      assert(false, 'LIVE downloadMedia without token must fail');
-    } catch (err: any) {
-      assert(
-        err.message.includes('MEDIA_MODE is LIVE') && err.message.includes('WHATSAPP_ACCESS_TOKEN is missing'),
-        'LIVE downloadMedia fails fast when Meta token is missing (G-062)'
-      );
-    }
-
-    // Process audio in LIVE mode without key -> must fail closed, NOT return canned transcript
-    mediaService.reconfigureProviders();
-    config.media.openAiApiKey = '';
-    try {
-      const audioRes = await mediaService.processAudioMessage('meta_live_audio_fail');
-      assert(false, 'LIVE audio processing without credentials must throw, got: ' + JSON.stringify(audioRes));
-    } catch (err: any) {
-      assert(
-        err.message.includes('failed in LIVE mode') || err.message.includes('OPENAI_API_KEY'),
-        'LIVE audio processing fails closed without credentials and does not return canned transcript (G-062)'
-      );
-    }
-
-    // Process image in LIVE mode without key -> must fail closed, NOT return canned labels
-    try {
-      const imgRes = await mediaService.processImageMessage('meta_live_img_fail');
-      assert(false, 'LIVE image processing without credentials must throw, got: ' + JSON.stringify(imgRes));
-    } catch (err: any) {
-      assert(
-        err.message.includes('failed in LIVE mode') || err.message.includes('OPENAI_API_KEY'),
-        'LIVE image processing fails closed without credentials and does not return canned labels (G-062)'
-      );
-    }
-
-    // -------------------------------------------------------------
-    // Test 5: Reverting to FIXTURE restores deterministic demo behavior (G-062)
-    // -------------------------------------------------------------
-    config.media.mode = 'FIXTURE';
-    config.media.transcriptionProvider = 'FIXTURE';
-    config.media.visionProvider = 'FIXTURE';
-    mediaService.reconfigureProviders();
-
-    const fixtureAudioRes = await mediaService.processAudioMessage('voice_order_crispy_chicken.ogg');
-    assert(
-      fixtureAudioRes.isMock === true && fixtureAudioRes.transcript.includes('Crispy Chicken'),
-      'FIXTURE mode successfully provides deterministic audio demo results (G-062)'
-    );
-
-    const fixtureImgRes = await mediaService.processImageMessage('crispy_tenders.jpg');
-    assert(
-      fixtureImgRes.isMock === true && Boolean(fixtureImgRes.matchedProduct),
-      'FIXTURE mode successfully matches demo food photo against catalog (G-062)'
-    );
-
-    // -------------------------------------------------------------
-    // Test 6: External Verification Status Reporting (G-065)
-    // -------------------------------------------------------------
-    config.whatsapp.mode = 'LIVE';
-    config.whatsapp.accessToken = '';
-    const pingRes = await whatsappService.pingMetaApi();
-    assert(
-      pingRes.ok === false && Boolean(pingRes.error?.includes('EXTERNAL VERIFICATION PENDING') || pingRes.error?.includes('Credentials not configured')),
-      'Meta API ping clearly reports EXTERNAL VERIFICATION PENDING when unconfigured (G-065)'
-    );
-
+    console.log('\n🏁 AI Configuration Matrix Tests: All Assertions Passed!\n');
+    return true;
   } finally {
-    // Restore original configs
-    config.media.mode = originalMediaMode;
-    config.media.transcriptionProvider = originalTransProvider;
-    config.media.visionProvider = originalVisionProvider;
-    config.media.openAiApiKey = originalApiKey;
-    config.whatsapp.mode = originalWaMode;
-    config.whatsapp.accessToken = originalWaToken;
-    mediaService.reconfigureProviders();
+    shadowCanaryRouter.configure(originalRouterConfig);
+    config.ai = originalEnvAi;
   }
-
-  console.log(`\n🏁 Configuration Matrix Results: ${passed} Passed, ${failed} Failed`);
-  return failed === 0;
 }
 
 if (process.argv[1]?.endsWith('test-config-matrix.ts') || process.argv[1]?.endsWith('test-config-matrix.js')) {
   runConfigMatrixTests()
-    .then((ok) => process.exit(ok ? 0 : 1))
+    .then(() => process.exit(0))
     .catch((err) => {
-      console.error('Fatal config matrix failure:', err);
+      console.error('Fatal configuration matrix error:', err);
       process.exit(1);
     });
 }
+

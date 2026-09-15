@@ -9,6 +9,14 @@ export interface AddressResolution {
 }
 
 export class CustomerService {
+  async findByPhone(whatsappNumber: string): Promise<Customer | null> {
+    const cleanPhone = whatsappNumber.replace(/[^0-9]/g, '');
+    const existing = await query<Customer[]>(`
+      SELECT * FROM customers WHERE whatsapp_number = ? LIMIT 1
+    `, [cleanPhone]);
+    return existing.length > 0 ? existing[0] : null;
+  }
+
   async findOrCreateByPhone(whatsappNumber: string, displayName?: string): Promise<Customer> {
     const cleanPhone = whatsappNumber.replace(/[^0-9]/g, '');
 

@@ -246,7 +246,24 @@ export async function runBrowserE2ETests(): Promise<boolean> {
       );
       assert(true, `[Iter ${iteration}] Masked Relay Chat transmits driver reply with zero phone exposure`);
 
-      // 14. Analytics Tab verification
+      // 14. Live WhatsApp Inbox and internal contacts verification
+      await clickElement(page, '[data-testid="tab-inbox"]');
+      await page.waitForSelector('[data-testid="whatsapp-inbox"]', { timeout: 8000 });
+      assert(
+        (await page.$('[data-testid="whatsapp-reply-input"]')) !== null &&
+        (await page.$('[data-testid="whatsapp-inbox-refresh"]')) !== null,
+        `[Iter ${iteration}] Live WhatsApp Inbox renders authenticated Meta conversation controls`
+      );
+
+      await clickElement(page, '[data-testid="tab-contacts"]');
+      await page.waitForSelector('[data-testid="people-contacts"]', { timeout: 8000 });
+      const contactsText = await page.evaluate(() => document.body.innerText);
+      assert(
+        contactsText.includes('People & Contacts') && contactsText.includes('Users') && contactsText.includes('Drivers') && contactsText.includes('Customers'),
+        `[Iter ${iteration}] People & Contacts renders internal user, driver, and customer sections`
+      );
+
+      // 15. Analytics Tab verification
       await clickElement(page, '[data-testid="tab-analytics"]');
       await page.waitForFunction(
         () => document.body.innerText.includes('Gross Revenue Today') && !document.body.innerText.includes('Calculating live business metrics'),
@@ -258,7 +275,7 @@ export async function runBrowserE2ETests(): Promise<boolean> {
         `[Iter ${iteration}] Analytics tab computes live MySQL metrics`
       );
 
-      // 15. Management AI Tab verification
+      // 16. Management AI Tab verification
       await clickElement(page, '[data-testid="tab-management"]');
       await page.waitForSelector('[data-testid="management-ai-input"]', { timeout: 8000 });
       const query = 'How many orders did we complete today?';
@@ -270,7 +287,7 @@ export async function runBrowserE2ETests(): Promise<boolean> {
       );
       assert(true, `[Iter ${iteration}] Management AI copilot answers executive query using live MySQL state`);
 
-      // 16. Post-rehearsal reset & verification
+      // 17. Post-rehearsal reset & verification
       await resetDemo();
       assert(true, `[Iter ${iteration}] Baseline counts returned to exact pristine invariants (0 drift)`);
     }

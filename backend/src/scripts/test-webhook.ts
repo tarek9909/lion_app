@@ -141,6 +141,45 @@ export async function runWebhookTests(): Promise<boolean> {
       };
     };
 
+    // 4b. Batched inbound messages must each be durable jobs, not only the
+    // first message in a Meta change value.
+    const batchIds = [`wamid.BATCH_A_${Date.now()}`, `wamid.BATCH_B_${Date.now()}`];
+    const batchPayload = {
+      object: 'whatsapp_business_account',
+      entry: [{ changes: [{ value: { messages: batchIds.map((id, index) => ({
+        from: '96170123456',
+        id,
+        timestamp: Math.floor(Date.now() / 1000).toString(),
+        type: 'text',
+        text: { body: index === 0 ? 'hello' : 'where is my order' },
+      })) } }] }],
+    };
+    const signedBatch = signPayload(batchPayload);
+    const batchRes = await fetch(`${baseUrl}/webhooks/whatsapp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-hub-signature-256': signedBatch.signature },
+      body: signedBatch.body,
+    });
+    let batchRecords: any[] = [];
+    for (let i = 0; i < 30; i++) {
+      batchRecords = await query<any[]>(
+        `SELECT provider_event_id, processing_status FROM integration_webhook_events
+         WHERE provider_event_id IN (?, ?)` ,
+        batchIds
+      );
+      if (batchRecords.length === 2 && batchRecords.every((row) => row.processing_status === 'PROCESSED')) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert(batchRes.status === 200 && batchRecords.length === 2 && batchRecords.every((row) => row.processing_status === 'PROCESSED'),
+      'Batched Meta payloads enqueue and process every inbound message');
+
+    const inboundBatchRows = await query<any[]>(
+      `SELECT provider_message_id FROM messages WHERE provider = 'META_WHATSAPP' AND provider_message_id IN (?, ?)`,
+      batchIds
+    );
+    assert(inboundBatchRows.length === 2,
+      'Batched inbound messages are persisted exactly once in the conversation inbox');
+
     // 5. Inbound Voice Note Processing (G-017, G-030)
     const audioMsgId = `wamid.AUDIO_${Date.now()}`;
     const audioPayload = {
@@ -229,7 +268,43 @@ export async function runWebhookTests(): Promise<boolean> {
       'whatsappService.sendMessage safely handles outbound delivery boundary with logging'
     );
 
+    // 8. Delivery receipt persistence from Meta webhook statuses.
+    const originalWhatsAppMode = config.whatsapp.mode;
+    const originalAccessToken = config.whatsapp.accessToken;
+    const originalPhoneNumberId = config.whatsapp.phoneNumberId;
+    const receiptMessageId = `wamid.RECEIPT_${Date.now()}`;
+    config.whatsapp.mode = 'LIVE';
+    config.whatsapp.accessToken = 'test_meta_access_token';
+    config.whatsapp.phoneNumberId = 'test_phone_number_id';
+    whatsappService.setFetchFn(async () => new Response(
+      JSON.stringify({ messages: [{ id: receiptMessageId }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    ));
+    const conversationRow = await query<any[]>(
+      `SELECT conversation_id FROM messages WHERE provider_message_id = ? LIMIT 1`,
+      [testMsgId]
+    );
+    const receiptSend = await whatsappService.sendMessage(
+      '96170123456',
+      'Receipt tracking test',
+      0,
+      conversationRow[0]?.conversation_id
+    );
+    await whatsappService.updateOutboundDeliveryStatus(receiptMessageId, 'DELIVERED');
+    await whatsappService.updateOutboundDeliveryStatus(receiptMessageId, 'READ');
+    const receiptRows = await query<any[]>(
+      `SELECT status, delivered_at, read_at FROM messages WHERE provider_message_id = ? LIMIT 1`,
+      [receiptMessageId]
+    );
+    assert(receiptSend.success && receiptRows[0]?.status === 'READ' && receiptRows[0]?.delivered_at && receiptRows[0]?.read_at,
+      'Meta SENT/DELIVERED/READ receipts update the outbound inbox message');
+    whatsappService.resetFetchFn();
+    config.whatsapp.mode = originalWhatsAppMode;
+    config.whatsapp.accessToken = originalAccessToken;
+    config.whatsapp.phoneNumberId = originalPhoneNumberId;
+
   } finally {
+    whatsappService.resetFetchFn();
     server.close();
   }
 

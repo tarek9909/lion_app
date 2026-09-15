@@ -22,8 +22,10 @@
     "test:rehearsal": "npm --prefix backend run test:rehearsal",
     "test:config-matrix": "npm --prefix backend run test:config-matrix",
     "test:gemini": "npm --prefix backend run test:gemini",
+    "test:ai-edgecases": "npm --prefix backend run test:ai-edgecases",
     "test:browser": "npm --prefix backend run test:browser",
     "test:demo-gaps": "npm --prefix backend run test:demo-gaps",
-    "demo:backup": "npm --prefix backend run demo:backup"
+    "demo:backup": "npm --prefix backend run demo:backup",
+    "test:ai-plan": "npm --prefix backend run test:ai-plan"
   }
 }

@@ -7,6 +7,7 @@ import { query } from '../../database/db.js';
 import { config } from '../../config/env.js';
 import { formatDualCurrency } from '../../shared/money.js';
 import { geminiService } from './gemini.service.js';
+import { shadowCanaryRouter } from './routing/shadow-canary.service.js';
 import { AIContextState, ValidatedIntent, AIProcessResult } from './ai.types.js';
 
 export { AIContextState, ValidatedIntent, AIProcessResult };
@@ -43,17 +44,30 @@ export class AIService {
 
   /**
    * Main Conversational Processing Pipeline (G-020, G-021)
+   * Routed via ShadowCanaryRouter to support Live, Shadow, Canary, and Rollback
    */
   async processCustomerMessage(
     whatsappNumber: string,
     messageText: string,
     mediaType?: 'text' | 'image' | 'audio' | 'location'
   ): Promise<AIProcessResult> {
-    // Dispatch to Gemini 3.8 Flash provider when configured
-    if (config.ai.provider === 'gemini') {
-      return geminiService.processCustomerMessage(whatsappNumber, messageText, mediaType);
-    }
+    const route = await shadowCanaryRouter.routeCustomerMessage(
+      whatsappNumber,
+      messageText,
+      mediaType,
+      (phone, msg, media) => this.processInternalLocal(phone, msg, media)
+    );
+    return route.result;
+  }
 
+  /**
+   * Local deterministic Smart NLU fallback implementation
+   */
+  async processInternalLocal(
+    whatsappNumber: string,
+    messageText: string,
+    mediaType?: 'text' | 'image' | 'audio' | 'location'
+  ): Promise<AIProcessResult> {
     const customer = await customerService.findOrCreateByPhone(whatsappNumber);
     const state = await this.getState(customer.id);
     const cart = await cartService.getOrCreateActiveCart(customer.id);

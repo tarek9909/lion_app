@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LionDeliveryTurnDatasetRecord",
+  "type": "object",
+  "required": [
+    "id",
+    "conversation_id",
+    "customer_id",
+    "split",
+    "customer_message",
+    "language",
+    "intent",
+    "needs_clarification",
+    "required_reply_facts",
+    "forbidden_actions",
+    "provenance",
+    "human_review_status"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "conversation_id": { "type": "string" },
+    "customer_id": { "type": "string" },
+    "split": { "type": "string", "enum": ["train", "val", "test", "locked_safety"] },
+    "turn_index": { "type": "integer" },
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "text"],
+        "properties": {
+          "role": { "type": "string", "enum": ["user", "assistant", "tool"] },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "state_before": { "type": "object" },
+    "customer_message": { "type": "string" },
+    "language": {
+      "type": "string",
+      "enum": ["en", "ar", "ar_lb", "arabizi", "mixed"]
+    },
+    "intent": { "type": "string" },
+    "entities": { "type": "object" },
+    "needs_clarification": { "type": "boolean" },
+    "clarification_type": {
+      "type": ["string", "null"],
+      "enum": [
+        "CART_ITEM_TARGET",
+        "VARIANT_OPTION",
+        "QUANTITY_TARGET",
+        "ADDRESS_SELECTION",
+        "IMAGE_DISAMBIGUATION",
+        "MERCHANT_SWITCH_CONFIRMATION",
+        null
+      ]
+    },
+    "expected_tool": { "type": ["string", "null"] },
+    "expected_tool_arguments": { "type": ["object", "null"] },
+    "expected_state_change": { "type": ["object", "null"] },
+    "required_reply_facts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "forbidden_actions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "provenance": {
+      "type": "string",
+      "enum": ["SYNTHETIC_SEED", "CUSTOMER_LOG", "EDGE_CASE"]
+    },
+    "human_review_status": {
+      "type": "string",
+      "enum": ["SYNTHETIC_UNREVIEWED", "HUMAN_APPROVED", "REJECTED", "PENDING"]
+    }
+  }
+}

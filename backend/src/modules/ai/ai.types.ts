@@ -1,4 +1,5 @@
 import { SearchResult } from '../catalog/catalog.service.js';
+import { ConversationStage } from './contract/behavior.contract.js';
 
 export interface AIContextState {
   customerId: number;
@@ -13,6 +14,14 @@ export interface AIContextState {
   selectedAddressLabel: string | null;
   awaitingConfirmation: boolean;
   activeOrderId: number | null;
+  /** Persisted inbound-customer-message counter used for turn isolation. */
+  turnIndex: number;
+  stage: ConversationStage;
+  checkoutFingerprint: string | null;
+  pendingMerchantSwitch?: any;
+  activeOrderSummary?: any;
+  cartSummary?: any;
+  selectedAddress?: any;
 }
 
 export type ValidatedIntent =

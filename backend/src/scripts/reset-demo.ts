@@ -141,6 +141,10 @@ export async function resetDemo() {
 
     // Deduplicate customers and addresses
     await conn.query(`
+      DELETE FROM customer_addresses 
+      WHERE customer_id NOT IN (SELECT id FROM customers WHERE whatsapp_number IN ('96170111222', '96171333444', '96176555666'))
+    `);
+    await conn.query(`
       DELETE a1 FROM customer_addresses a1 
       JOIN customer_addresses a2 ON a1.customer_id = a2.customer_id AND a1.label = a2.label AND a1.id > a2.id
     `);

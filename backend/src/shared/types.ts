@@ -145,6 +145,7 @@ export interface Order {
   driver_id: number | null;
   driver_name?: string;
   driver_code?: string;
+  driver_whatsapp_number?: string;
   customer_address_id: number;
   address_label?: string;
   formatted_address?: string;

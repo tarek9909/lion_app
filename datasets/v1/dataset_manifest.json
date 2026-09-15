@@ -1,0 +1,17 @@
+{
+  "datasetVersion": "1.0.0",
+  "generatedAt": "2026-09-15T11:38:30.811Z",
+  "totalSyntheticSeedRecords": 29,
+  "provenanceBreakdown": {
+    "SYNTHETIC_SEED": 29,
+    "CUSTOMER_LOG": 0,
+    "EDGE_CASE": 6
+  },
+  "humanReviewAudit": {
+    "status": "PENDING_HUMAN_REVIEW",
+    "targetRecords": "3,000 to 5,000 human-annotated dialogue records",
+    "currentHumanApprovedCount": 0,
+    "currentSyntheticUnreviewedCount": 29,
+    "note": "All initial training seed records are generated algorithmically and marked SYNTHETIC_UNREVIEWED. Human review campaign is pending annotator recruitment."
+  }
+}

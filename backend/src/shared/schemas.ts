@@ -64,6 +64,10 @@ export const relayMessageSchema = z.object({
   message: 'Message text is required (text or message)',
 });
 
+export const whatsappInboxReplySchema = z.object({
+  text: z.string().trim().min(1, 'Message text is required').max(4096, 'Message is too long'),
+});
+
 export const idParamSchema = z.object({
   id: z.coerce.number().int().positive('ID must be a positive integer'),
 });

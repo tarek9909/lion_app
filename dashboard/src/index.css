@@ -1,45 +1,45 @@
 /* ==========================================================================
-   Lion Delivery — Luxury Dark Theme & Design Tokens
+   Lion Delivery — Clean White Theme & Design Tokens
    ========================================================================== */
 
 :root {
-  --bg-base: #0a0d14;
-  --bg-surface: #10141e;
-  --bg-surface-elevated: #161b29;
-  --bg-card: rgba(19, 24, 38, 0.75);
-  --bg-card-hover: rgba(26, 33, 50, 0.9);
+  --bg-base: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
   
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-medium: rgba(255, 255, 255, 0.14);
-  --border-active: rgba(245, 158, 11, 0.4);
+  --border-subtle: #e2e8f0;
+  --border-medium: #cbd5e1;
+  --border-active: #d97706;
 
-  --brand-gold: #f59e0b;
-  --brand-gold-light: #fbbf24;
-  --brand-gold-dark: #d97706;
-  --brand-gold-glow: rgba(245, 158, 11, 0.25);
+  --brand-gold: #d97706;
+  --brand-gold-light: #f59e0b;
+  --brand-gold-dark: #b45309;
+  --brand-gold-glow: rgba(217, 119, 6, 0.15);
 
-  --accent-emerald: #10b981;
-  --accent-emerald-glow: rgba(16, 185, 129, 0.25);
-  --accent-cyan: #06b6d4;
-  --accent-cyan-glow: rgba(6, 182, 212, 0.25);
-  --accent-rose: #f43f5e;
-  --accent-amber: #f59e0b;
-  --accent-blue: #3b82f6;
+  --accent-emerald: #059669;
+  --accent-emerald-glow: rgba(5, 150, 105, 0.15);
+  --accent-cyan: #0891b2;
+  --accent-cyan-glow: rgba(8, 145, 178, 0.15);
+  --accent-rose: #e11d48;
+  --accent-amber: #d97706;
+  --accent-blue: #2563eb;
 
-  --text-primary: #f9fafb;
-  --text-secondary: #9ca3af;
-  --text-tertiary: #6b7280;
-  --text-gold: #fcd34d;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #94a3b8;
+  --text-gold: #b45309;
 
   --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 10px 25px -3px rgba(0, 0, 0, 0.5), 0 4px 10px -2px rgba(0, 0, 0, 0.3);
-  --shadow-gold: 0 0 20px rgba(245, 158, 11, 0.18);
-  --shadow-emerald: 0 0 20px rgba(16, 185, 129, 0.2);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+  --shadow-gold: 0 2px 8px rgba(217, 119, 6, 0.2);
+  --shadow-emerald: 0 2px 8px rgba(5, 150, 105, 0.2);
 
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -74,10 +74,7 @@ html, body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: 
-    radial-gradient(circle at 15% 10%, rgba(245, 158, 11, 0.05) 0%, transparent 40%),
-    radial-gradient(circle at 85% 90%, rgba(6, 182, 212, 0.04) 0%, transparent 40%),
-    var(--bg-base);
+  background-color: var(--bg-base);
 }
 
 /* Custom Scrollbars */
@@ -89,11 +86,11 @@ html, body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: #cbd5e1;
   border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: #94a3b8;
 }
 
 /* Typography Utilities */
@@ -104,23 +101,30 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.02em;
 }
 
-/* Glassmorphism Classes */
+/* Card & Surface Classes (Zero Gradients) */
 .glass-panel {
   background: var(--bg-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
   transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
 }
 
 .glass-panel:hover {
   border-color: var(--border-medium);
+  box-shadow: var(--shadow-md);
 }
 
 .gold-glow {
   box-shadow: var(--shadow-gold);
+}
+
+/* Form Controls */
+input, select, textarea {
+  font-family: inherit;
+  color: var(--text-primary);
+  background-color: #ffffff;
+  border: 1px solid var(--border-subtle);
 }
 
 /* Animations */
@@ -152,12 +156,12 @@ h1, h2, h3, h4, h5, h6 {
   height: 8px;
   border-radius: 50%;
   background-color: var(--accent-emerald);
-  box-shadow: 0 0 10px var(--accent-emerald);
+  box-shadow: 0 0 8px var(--accent-emerald);
   display: inline-block;
   animation: pulseGlow 2s infinite ease-in-out;
 }
 
-/* Buttons & Inputs */
+/* Buttons & Inputs (Zero Gradients) */
 button {
   cursor: pointer;
   border: none;
@@ -167,19 +171,19 @@ button {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--brand-gold-light), var(--brand-gold-dark));
-  color: #0b0f19;
+  background-color: var(--brand-gold);
+  color: #ffffff;
   font-weight: 600;
   padding: 8px 18px;
   border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  box-shadow: var(--shadow-gold);
+  box-shadow: var(--shadow-sm);
 }
 
 .btn-primary:hover {
-  filter: brightness(1.1);
+  background-color: var(--brand-gold-dark);
   transform: translateY(-1px);
 }
 
@@ -188,9 +192,9 @@ button {
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.06);
+  background-color: #ffffff;
   color: var(--text-primary);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-medium);
   font-weight: 500;
   padding: 8px 16px;
   border-radius: var(--radius-md);
@@ -200,8 +204,8 @@ button {
 }
 
 .btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: var(--border-medium);
+  background-color: #f1f5f9;
+  border-color: #94a3b8;
 }
 
 .badge {
@@ -217,31 +221,32 @@ button {
 }
 
 .badge-gold {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background-color: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
 }
 
 .badge-emerald {
-  background: rgba(16, 185, 129, 0.15);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background-color: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
 }
 
 .badge-cyan {
-  background: rgba(6, 182, 212, 0.15);
-  color: #38bdf8;
-  border: 1px solid rgba(6, 182, 212, 0.3);
+  background-color: #f0f9ff;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
 }
 
 .badge-rose {
-  background: rgba(244, 63, 94, 0.15);
-  color: #fb7185;
-  border: 1px solid rgba(244, 63, 94, 0.3);
+  background-color: #fff1f2;
+  color: #be123c;
+  border: 1px solid #fecdd3;
 }
 
 .badge-gray {
-  background: rgba(156, 163, 175, 0.15);
-  color: #d1d5db;
-  border: 1px solid rgba(156, 163, 175, 0.3);
+  background-color: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
 }
+

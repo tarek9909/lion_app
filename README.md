@@ -10,7 +10,7 @@ Lion Delivery is an operations and delivery management platform built around a s
 ## 📁 Repository Structure
 
 - `backend/`: Express + TypeScript + MySQL 8 + Redis backend implementing the WhatsApp conversational engine, catalog search, cart management, fulfillment lifecycle, masked relay, real-time WebSocket, analytics, and management AI.
-- `dashboard/`: Vite + React 19 + TypeScript + Vanilla CSS executive dashboard featuring WhatsApp simulator, live orders Kanban, masked relay monitor, catalog browser, fleet monitor, analytics, and management AI copilot.
+- `dashboard/`: Vite + React 19 + TypeScript + Vanilla CSS executive dashboard featuring live orders, masked relay monitor, catalog browser, fleet monitor, live Meta WhatsApp Inbox, internal People & Contacts, analytics, and management AI copilot. Real WhatsApp traffic is handled by the backend Meta webhook/API integration; driver GPS simulation is not used.
 - `Lion_Delivery_Full_MySQL_Database.sql`: Complete MySQL database schema and relational design (**121 base tables and 5 views**).
 - `docs/`: Comprehensive project documentation suite including business specs, technical architecture, and the authoritative 50-gap remediation plan (`docs/Lion_Delivery_Demo_Gaps_and_Fix_Plan.md`).
 

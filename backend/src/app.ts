@@ -17,6 +17,12 @@ import { getRelayMessages, sendRelayMessage } from './modules/relay/relay.contro
 import { getOverviewAnalytics } from './modules/analytics/analytics.controller.js';
 import { askManagementAI } from './modules/management-ai/management-ai.controller.js';
 import { getMerchants, getProducts, searchProducts } from './modules/catalog/catalog.controller.js';
+import {
+  getDashboardContacts,
+  getWhatsAppInboxConversations,
+  getWhatsAppInboxMessages,
+  sendWhatsAppInboxReply,
+} from './modules/dashboard/dashboard.controller.js';
 import { customerService } from './modules/customers/customer.service.js';
 import { login } from './modules/auth/auth.controller.js';
 import { authenticate, requireRoles } from './modules/auth/auth.middleware.js';
@@ -36,6 +42,7 @@ import {
   driverRejectSchema,
   driverDeliverSchema,
   relayMessageSchema,
+  whatsappInboxReplySchema,
   idParamSchema,
   orderIdParamSchema,
 } from './shared/schemas.js';
@@ -93,6 +100,14 @@ app.get('/api/conversations/:phone/history', getConversations);
 // Auth (G-004 validated)
 app.post('/api/auth/login', validateBody(loginSchema), login);
 app.post('/api/v1/auth/login', validateBody(loginSchema), login);
+
+// Internal dashboard contacts and live WhatsApp inbox
+const dashboardRoles = requireRoles('SUPERADMIN', 'ADMIN', 'OPERATOR', 'DISPATCHER');
+app.get(['/api/dashboard/contacts', '/api/v1/dashboard/contacts'], authenticate, dashboardRoles, getDashboardContacts);
+app.get(['/api/whatsapp/inbox/conversations', '/api/v1/whatsapp/inbox/conversations'], authenticate, dashboardRoles, getWhatsAppInboxConversations);
+app.get(['/api/whatsapp/inbox/conversations/:id', '/api/v1/whatsapp/inbox/conversations/:id'], authenticate, dashboardRoles, validateParams(idParamSchema), getWhatsAppInboxMessages);
+app.get(['/api/whatsapp/inbox/conversations/:id/messages', '/api/v1/whatsapp/inbox/conversations/:id/messages'], authenticate, dashboardRoles, validateParams(idParamSchema), getWhatsAppInboxMessages);
+app.post(['/api/whatsapp/inbox/conversations/:id/reply', '/api/v1/whatsapp/inbox/conversations/:id/reply'], authenticate, dashboardRoles, validateParams(idParamSchema), validateBody(whatsappInboxReplySchema), sendWhatsAppInboxReply);
 
 // Catalog & Search (Public browse/search)
 app.get('/api/catalog', getProducts);

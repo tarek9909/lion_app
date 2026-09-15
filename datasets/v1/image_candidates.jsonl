@@ -1,0 +1,2 @@
+{"id":"img_001","image_fixture":"crispy_chicken_photo.jpg","candidate_queries":["Crispy Chicken Meal","Chicken Tenders"],"confidence":0.92,"needs_clarification":false,"matched_catalog_product":"Crispy Chicken Meal","provenance":"SYNTHETIC_SEED","human_review_status":"SYNTHETIC_UNREVIEWED"}
+{"id":"img_002","image_fixture":"unclear_menu_photo.jpg","candidate_queries":["Burger Meal","Tawouk Sandwich"],"confidence":0.65,"needs_clarification":true,"matched_catalog_product":null,"provenance":"SYNTHETIC_SEED","human_review_status":"SYNTHETIC_UNREVIEWED"}

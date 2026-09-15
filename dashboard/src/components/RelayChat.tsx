@@ -102,28 +102,28 @@ export const RelayChat: React.FC = () => {
   const currentOrder = orders.find((o) => o.id === selectedOrderId);
 
   return (
-    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: 'calc(100vh - 100px)' }}>
+    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', boxSizing: 'border-box' }}>
       {/* Privacy Guarantee Header Banner */}
-      <div className="glass-panel" style={{ padding: '16px 20px', borderLeft: '4px solid #10B981', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="glass-panel" style={{ padding: '16px 20px', borderLeft: '4px solid #059669', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{
             width: '40px',
             height: '40px',
             borderRadius: '10px',
-            background: 'rgba(16, 185, 129, 0.15)',
+            background: '#ecfdf5',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            border: '1px solid rgba(16, 185, 129, 0.3)',
+            border: '1px solid #a7f3d0',
           }}>
-            <ShieldCheck size={22} color="#34D399" />
+            <ShieldCheck size={22} color="#059669" />
           </div>
           <div>
-            <h3 style={{ fontSize: '16px', margin: 0, color: '#FFFFFF' }}>
+            <h3 style={{ fontSize: '16px', margin: 0, color: 'var(--text-primary)' }}>
               Zero-Exposure Privacy & Identity Protection Relay
             </h3>
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>
-              Neither customer nor driver ever sees the other's personal phone number. All messages pass through the masked relay bridge.
+              Dashboard operators can see full contact numbers. Customers and drivers remain protected from each other's numbers through the WhatsApp relay bridge.
             </p>
           </div>
         </div>
@@ -137,9 +137,9 @@ export const RelayChat: React.FC = () => {
               value={selectedOrderId || ''}
               onChange={(e) => setSelectedOrderId(Number(e.target.value))}
               style={{
-                background: 'rgba(255, 255, 255, 0.08)',
-                color: '#FFFFFF',
-                border: '1px solid var(--border-subtle)',
+                background: '#ffffff',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-medium)',
                 borderRadius: '6px',
                 padding: '6px 10px',
                 fontSize: '12px',
@@ -147,7 +147,7 @@ export const RelayChat: React.FC = () => {
               }}
             >
               {orders.map((o) => (
-                <option key={o.id} value={o.id} style={{ background: '#111827', color: '#FFFFFF' }}>
+                <option key={o.id} value={o.id} style={{ background: '#ffffff', color: '#0f172a' }}>
                   #{o.order_number} ({o.customer_name} • {o.merchant_name})
                 </option>
               ))}
@@ -159,11 +159,11 @@ export const RelayChat: React.FC = () => {
             alignItems: 'center',
             gap: '8px',
             padding: '6px 12px',
-            background: 'rgba(56, 189, 248, 0.1)',
-            border: '1px solid rgba(56, 189, 248, 0.3)',
+            background: '#f0f9ff',
+            border: '1px solid #bae6fd',
             borderRadius: '8px',
             fontSize: '12px',
-            color: '#38BDF8',
+            color: '#0369a1',
           }}>
             <PhoneCall size={14} />
             <span>Masked VoIP Ready</span>
@@ -180,7 +180,7 @@ export const RelayChat: React.FC = () => {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{
             padding: '14px 18px',
-            background: 'rgba(255, 255, 255, 0.03)',
+            background: '#f8fafc',
             borderBottom: '1px solid var(--border-subtle)',
             display: 'flex',
             alignItems: 'center',
@@ -191,13 +191,13 @@ export const RelayChat: React.FC = () => {
                 C
               </div>
               <div>
-                <strong style={{ fontSize: '14px', color: '#FFFFFF' }}>Customer View ({currentOrder?.customer_name || 'Customer'})</strong>
+                <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Customer View ({currentOrder?.customer_name || 'Customer'})</strong>
                 <div style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
-                  Phone Protected: <span style={{ color: '#34D399' }}>+961 70 ••• •••</span>
+                  Customer WhatsApp: <span style={{ color: '#059669' }}>{currentOrder?.customer_phone || 'Not available'}</span>
                 </div>
               </div>
             </div>
-            <span style={{ fontSize: '12px', color: '#38BDF8', background: 'rgba(56, 189, 248, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+            <span style={{ fontSize: '12px', color: '#0369a1', background: '#f0f9ff', padding: '2px 8px', borderRadius: '4px', border: '1px solid #bae6fd' }}>
               Talking to: {currentOrder?.driver_name ? `Driver ${currentOrder.driver_code}` : 'Driver D-101'}
             </span>
           </div>
@@ -227,8 +227,9 @@ export const RelayChat: React.FC = () => {
                   >
                     <div style={{
                       maxWidth: '85%',
-                      background: isMine ? '#0284C7' : 'rgba(255, 255, 255, 0.08)',
-                      color: '#FFFFFF',
+                      background: isMine ? '#0284C7' : '#f1f5f9',
+                      color: isMine ? '#FFFFFF' : 'var(--text-primary)',
+                      border: isMine ? 'none' : '1px solid var(--border-subtle)',
                       padding: '10px 14px',
                       borderRadius: isMine ? '12px 0 12px 12px' : '0 12px 12px 12px',
                       fontSize: '13px',
@@ -245,7 +246,7 @@ export const RelayChat: React.FC = () => {
           </div>
 
           {/* Quick instructions & Input */}
-          <div style={{ padding: '12px 16px', background: 'rgba(255, 255, 255, 0.02)', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ padding: '12px 16px', background: '#f8fafc', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 onClick={() => sendFromCustomer('Bala ma tdo2 el jaras 3afak el baby nayem')}
@@ -272,11 +273,11 @@ export const RelayChat: React.FC = () => {
                 onKeyDown={(e) => e.key === 'Enter' && sendFromCustomer(customerInput)}
                 style={{
                   flex: 1,
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid var(--border-subtle)',
+                  background: '#ffffff',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '6px',
                   padding: '8px 12px',
-                  color: '#FFFFFF',
+                  color: 'var(--text-primary)',
                   fontSize: '13px',
                 }}
               />
@@ -291,24 +292,24 @@ export const RelayChat: React.FC = () => {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{
             padding: '14px 18px',
-            background: 'rgba(255, 255, 255, 0.03)',
+            background: '#f8fafc',
             borderBottom: '1px solid var(--border-subtle)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0B0F19', fontWeight: 700 }}>
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#d97706', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#FFFFFF', fontWeight: 700 }}>
                 D
               </div>
               <div>
-                <strong style={{ fontSize: '14px', color: '#FFFFFF' }}>Driver View ({currentOrder?.driver_name || 'Captain Ahmad Saleh'})</strong>
+                <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Driver View ({currentOrder?.driver_name || 'Captain Ahmad Saleh'})</strong>
                 <div style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
-                  Driver Phone Protected: <span style={{ color: '#FBBF24' }}>+961 76 ••• •••</span>
+                  Driver WhatsApp: <span style={{ color: '#b45309' }}>{currentOrder?.driver_whatsapp_number || 'Not assigned'}</span>
                 </div>
               </div>
             </div>
-            <span style={{ fontSize: '12px', color: '#34D399', background: 'rgba(16, 185, 129, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+            <span style={{ fontSize: '12px', color: '#047857', background: '#ecfdf5', padding: '2px 8px', borderRadius: '4px', border: '1px solid #a7f3d0' }}>
               Order #{currentOrder?.order_number || 'ORD-DEMO'}
             </span>
           </div>
@@ -338,8 +339,9 @@ export const RelayChat: React.FC = () => {
                   >
                     <div style={{
                       maxWidth: '85%',
-                      background: isMine ? '#D97706' : 'rgba(255, 255, 255, 0.08)',
-                      color: '#FFFFFF',
+                      background: isMine ? '#d97706' : '#f1f5f9',
+                      color: isMine ? '#FFFFFF' : 'var(--text-primary)',
+                      border: isMine ? 'none' : '1px solid var(--border-subtle)',
                       padding: '10px 14px',
                       borderRadius: isMine ? '12px 0 12px 12px' : '0 12px 12px 12px',
                       fontSize: '13px',
@@ -356,7 +358,7 @@ export const RelayChat: React.FC = () => {
           </div>
 
           {/* Quick instructions & Input */}
-          <div style={{ padding: '12px 16px', background: 'rgba(255, 255, 255, 0.02)', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ padding: '12px 16px', background: '#f8fafc', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 onClick={() => sendFromDriver('Khaye akid, ha 7etta 3al beb w de2lekk')}
@@ -383,11 +385,11 @@ export const RelayChat: React.FC = () => {
                 onKeyDown={(e) => e.key === 'Enter' && sendFromDriver(driverInput)}
                 style={{
                   flex: 1,
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid var(--border-subtle)',
+                  background: '#ffffff',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '6px',
                   padding: '8px 12px',
-                  color: '#FFFFFF',
+                  color: 'var(--text-primary)',
                   fontSize: '13px',
                 }}
               />

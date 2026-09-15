@@ -4,6 +4,7 @@ import { config, validateStartupConfig } from './config/env.js';
 import { testDbConnection } from './database/db.js';
 import { initWebSocketServer } from './services/websocket.js';
 import { cartService } from './modules/carts/cart.service.js';
+import { whatsappWorker } from './modules/conversations/whatsapp.worker.js';
 
 const server = http.createServer(app);
 
@@ -22,6 +23,7 @@ async function startServer() {
   }
   console.log(`✅ Connected to MySQL database "${config.db.database}" on ${config.db.host}:${config.db.port}`);
   cartService.startAbandonmentScheduler();
+  whatsappWorker.start();
 
   server.listen(config.port, () => {
     console.log(`🦁 Lion Delivery API Server running at http://localhost:${config.port}`);

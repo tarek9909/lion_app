@@ -138,9 +138,17 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
 
   // 3a: Tool - Catalog Search (via Gemini function call round)
   let fetchCallCount = 0;
+  let functionResponseRoleSeen: string | undefined;
   geminiService.setFetchFn(async (url: any, options: any) => {
     fetchCallCount++;
     const body = JSON.parse(options.body);
+
+    if (fetchCallCount > 1) {
+      const responseTurn = body.contents?.find((content: any) =>
+        content.parts?.some((part: any) => part.functionResponse)
+      );
+      functionResponseRoleSeen = responseTurn?.role;
+    }
 
     // First round: simulate Gemini calling 'search_catalog'
     if (fetchCallCount === 1) {
@@ -191,7 +199,11 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
     searchRes.intent === 'SEARCH_RESULTS' &&
       searchRes.replyText.includes('Chicken House') &&
       searchRes.replyText.includes('$10.50'),
-    'Gemini executes search_catalog tool and reports real catalog prices & delivery fees'
+      'Gemini executes search_catalog tool and reports real catalog prices & delivery fees'
+  );
+  assert(
+    functionResponseRoleSeen === 'user',
+    'Gemini sends functionResponse in a valid user turn (never the unsupported function role)'
   );
 
   // 3b: Tool - Add to Cart with notes
@@ -534,6 +546,7 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
 
   const confirmedRes = await geminiService.processCustomerMessage(TEST_PHONE, 'confirm');
   const ordersAfterConfirmed = await query<any[]>(`SELECT * FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT 1`, [customer.id]);
+
 
   assert(
     confirmedRes.intent === 'ORDER_CONFIRMED' &&

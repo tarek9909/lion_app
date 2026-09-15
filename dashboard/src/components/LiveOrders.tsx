@@ -157,7 +157,7 @@ export const LiveOrders: React.FC = () => {
   });
 
   return (
-    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: 'calc(100vh - 100px)' }}>
+    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', boxSizing: 'border-box' }}>
       {/* Top Filter Bar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
@@ -204,15 +204,16 @@ export const LiveOrders: React.FC = () => {
                   style={{
                     padding: '16px',
                     borderRadius: '10px',
-                    background: isSelected ? 'rgba(245, 158, 11, 0.12)' : 'rgba(255, 255, 255, 0.03)',
-                    border: `1px solid ${isSelected ? 'rgba(245, 158, 11, 0.4)' : 'rgba(255, 255, 255, 0.06)'}`,
+                    background: isSelected ? '#fef3c7' : '#ffffff',
+                    border: `1px solid ${isSelected ? '#fde68a' : 'var(--border-subtle)'}`,
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
+                    boxShadow: 'var(--shadow-sm)',
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                     <div>
-                      <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '15px', color: '#FCD34D' }}>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '15px', color: '#b45309' }}>
                         #{order.order_number}
                       </span>
                       <span style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginLeft: '8px' }}>
@@ -226,22 +227,22 @@ export const LiveOrders: React.FC = () => {
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Store size={14} color="#FBBF24" />
-                      <span style={{ fontWeight: 600, color: '#E5E7EB' }}>{order.merchant_name}</span>
+                      <Store size={14} color="#d97706" />
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{order.merchant_name}</span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <User size={14} color="#38BDF8" />
+                      <User size={14} color="#0284c7" />
                       <span>{order.customer_name}</span>
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)' }}>
                     <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-                      Deliver to: <strong style={{ color: '#E5E7EB' }}>{order.address_label || 'Home'}</strong>
+                      Deliver to: <strong style={{ color: 'var(--text-primary)' }}>{order.address_label || 'Home'}</strong>
                     </div>
-                    <div style={{ fontWeight: 700, fontSize: '16px', color: '#FCD34D' }}>
+                    <div style={{ fontWeight: 700, fontSize: '16px', color: '#b45309' }}>
                       ${order.grand_total.toFixed(2)}
-                      <div style={{ fontSize: '11px', fontWeight: 500, color: '#FDE68A' }}>≈ {formatLbp(order)}</div>
+                      <div style={{ fontSize: '11px', fontWeight: 500, color: '#d97706' }}>≈ {formatLbp(order)}</div>
                     </div>
                   </div>
                 </div>
@@ -255,7 +256,7 @@ export const LiveOrders: React.FC = () => {
           <div className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <h3 style={{ fontSize: '18px', color: '#FCD34D', margin: 0 }}>
+                <h3 style={{ fontSize: '18px', color: '#b45309', margin: 0 }}>
                   Order #{selectedOrder.order_number}
                 </h3>
                 <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
@@ -268,26 +269,26 @@ export const LiveOrders: React.FC = () => {
             </div>
 
             {/* Merchant & Customer Details */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '14px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '10px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '14px', background: '#f8fafc', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
-                <Store size={15} color="#FBBF24" />
+                <Store size={15} color="#d97706" />
                 <span style={{ color: 'var(--text-secondary)' }}>Merchant:</span>
-                <strong style={{ color: '#FFFFFF' }}>{selectedOrder.merchant_name}</strong>
+                <strong style={{ color: 'var(--text-primary)' }}>{selectedOrder.merchant_name}</strong>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
-                <User size={15} color="#38BDF8" />
+                <User size={15} color="#0284c7" />
                 <span style={{ color: 'var(--text-secondary)' }}>Customer:</span>
-                <strong style={{ color: '#FFFFFF' }}>{selectedOrder.customer_name}</strong>
-                <span style={{ fontSize: '11px', color: '#9CA3AF' }}>({selectedOrder.customer_phone})</span>
+                <strong style={{ color: 'var(--text-primary)' }}>{selectedOrder.customer_name}</strong>
+                <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>({selectedOrder.customer_phone})</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
-                <MapPin size={15} color="#F43F5E" />
+                <MapPin size={15} color="#e11d48" />
                 <span style={{ color: 'var(--text-secondary)' }}>Address:</span>
-                <strong style={{ color: '#FFFFFF' }}>{selectedOrder.address_label}</strong>
-                <span style={{ fontSize: '11px', color: '#9CA3AF' }}>— {selectedOrder.formatted_address}</span>
+                <strong style={{ color: 'var(--text-primary)' }}>{selectedOrder.address_label}</strong>
+                <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>— {selectedOrder.formatted_address}</span>
               </div>
               {selectedOrder.delivery_notes && (
-                <div style={{ padding: '8px 10px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '6px', fontSize: '12px', color: '#FCD34D' }}>
+                <div style={{ padding: '8px 10px', background: '#fef3c7', borderRadius: '6px', fontSize: '12px', color: '#b45309' }}>
                   <strong>Address Note:</strong> {selectedOrder.delivery_notes}
                 </div>
               )}
@@ -295,20 +296,20 @@ export const LiveOrders: React.FC = () => {
 
             {/* Items Breakdown */}
             <div>
-              <h4 style={{ fontSize: '14px', color: '#E5E7EB', marginBottom: '10px' }}>Ordered Items</h4>
+              <h4 style={{ fontSize: '14px', color: 'var(--text-primary)', marginBottom: '10px' }}>Ordered Items</h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {selectedOrder.items && selectedOrder.items.length > 0 ? (
                   selectedOrder.items.map((item, idx) => (
-                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '6px 0', borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
                       <div>
                         <span>{item.quantity}x <strong>{item.product_name_snapshot}</strong></span>
                         {item.customer_notes && (
-                          <div style={{ fontSize: '11px', color: '#38BDF8', marginLeft: '18px' }}>
+                          <div style={{ fontSize: '11px', color: '#0284c7', marginLeft: '18px' }}>
                             ↳ Note: {item.customer_notes}
                           </div>
                         )}
                       </div>
-                      <span style={{ fontWeight: 600, color: '#FCD34D' }}>
+                      <span style={{ fontWeight: 600, color: '#b45309' }}>
                         ${parseFloat(String(item.line_total)).toFixed(2)}
                       </span>
                     </div>
@@ -321,7 +322,7 @@ export const LiveOrders: React.FC = () => {
               </div>
 
               {/* Financial Totals */}
-              <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.1)', display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px' }}>
+              <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
                   <span>Subtotal:</span>
                   <span>${selectedOrder.subtotal?.toFixed(2)}</span>
@@ -330,19 +331,19 @@ export const LiveOrders: React.FC = () => {
                   <span>Delivery Fee:</span>
                   <span>${selectedOrder.delivery_fee?.toFixed(2)}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 700, color: '#FCD34D', marginTop: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 700, color: '#b45309', marginTop: '6px' }}>
                   <span>Grand Total (Cash):</span>
                   <span style={{ textAlign: 'right' }}>
                     ${selectedOrder.grand_total?.toFixed(2)}
-                    <div style={{ fontSize: '11px', fontWeight: 500, color: '#FDE68A' }}>≈ {formatLbp(selectedOrder)}</div>
+                    <div style={{ fontSize: '11px', fontWeight: 500, color: '#d97706' }}>≈ {formatLbp(selectedOrder)}</div>
                   </span>
                 </div>
               </div>
             </div>
 
             {/* Operator Actions Bar (Merchant / Driver Workflows) */}
-            <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}>
-              <h4 style={{ fontSize: '13px', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '10px' }}>
+            <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
+              <h4 style={{ fontSize: '13px', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '10px' }}>
                 Live Workflow Simulation · Operator Master Console
               </h4>
 
@@ -364,7 +365,7 @@ export const LiveOrders: React.FC = () => {
                       onClick={() => handleMerchantReject(selectedOrder.id)}
                       disabled={actionLoading === selectedOrder.id}
                       className="btn-secondary"
-                      style={{ flex: 1, borderColor: '#F43F5E', color: '#FDA4AF' }}
+                      style={{ flex: 1, borderColor: '#fecdd3', color: '#be123c', background: '#fff1f2' }}
                     >
                       <span>Restaurant Tablet · Reject (Kitchen Peak)</span>
                     </button>
@@ -378,7 +379,7 @@ export const LiveOrders: React.FC = () => {
                       onClick={() => handleMerchantReady(selectedOrder.id)}
                       disabled={actionLoading === selectedOrder.id}
                       className="btn-primary"
-                      style={{ flex: 1, background: 'linear-gradient(135deg, #3B82F6, #1D4ED8)' }}
+                      style={{ flex: 1, backgroundColor: '#2563eb', color: '#ffffff' }}
                     >
                       <span>Restaurant Tablet · Mark Ready</span>
                     </button>
@@ -387,7 +388,7 @@ export const LiveOrders: React.FC = () => {
                       onClick={() => handleDriverAccept(selectedOrder.id)}
                       disabled={actionLoading === selectedOrder.id}
                       className="btn-secondary"
-                      style={{ flex: 1, borderColor: '#06B6D4', color: '#67E8F9' }}
+                      style={{ flex: 1, borderColor: '#bae6fd', color: '#0369a1', background: '#f0f9ff' }}
                     >
                       <Bike size={16} />
                       <span>Driver App · Accept Offer</span>
@@ -401,7 +402,7 @@ export const LiveOrders: React.FC = () => {
                     onClick={() => handleDriverAccept(selectedOrder.id)}
                     disabled={actionLoading === selectedOrder.id}
                     className="btn-secondary"
-                    style={{ flex: 1, borderColor: '#06B6D4', color: '#67E8F9' }}
+                    style={{ flex: 1, borderColor: '#bae6fd', color: '#0369a1', background: '#f0f9ff' }}
                   >
                     <Bike size={16} />
                     <span>Driver App · Accept Offer</span>
@@ -415,7 +416,7 @@ export const LiveOrders: React.FC = () => {
                       onClick={() => handleDriverPickup(selectedOrder.id)}
                       disabled={actionLoading === selectedOrder.id}
                       className="btn-secondary"
-                      style={{ flex: 1, borderColor: '#F59E0B', color: '#FBBF24' }}
+                      style={{ flex: 1, borderColor: '#fde68a', color: '#b45309', background: '#fef3c7' }}
                     >
                       <Store size={16} />
                       <span>Driver App · Pick Up</span>
@@ -425,7 +426,7 @@ export const LiveOrders: React.FC = () => {
                       onClick={() => handleDriverReject(selectedOrder.id)}
                       disabled={actionLoading === selectedOrder.id}
                       className="btn-secondary"
-                      style={{ borderColor: '#F43F5E', color: '#FDA4AF', fontSize: '11px', padding: '6px 10px' }}
+                      style={{ borderColor: '#fecdd3', color: '#be123c', background: '#fff1f2', fontSize: '11px', padding: '6px 10px' }}
                     >
                       <span>Driver App · Reject / Reassign</span>
                     </button>
@@ -438,7 +439,7 @@ export const LiveOrders: React.FC = () => {
                     onClick={() => handleDriverDeliver(selectedOrder.id)}
                     disabled={actionLoading === selectedOrder.id}
                     className="btn-primary"
-                    style={{ flex: 1, background: 'linear-gradient(135deg, #10B981, #059669)', color: '#FFFFFF' }}
+                    style={{ flex: 1, backgroundColor: '#059669', color: '#ffffff' }}
                   >
                     <CheckCircle2 size={16} />
                     <span>Driver App · Deliver & Rate</span>
@@ -450,9 +451,9 @@ export const LiveOrders: React.FC = () => {
                     width: '100%',
                     padding: '10px',
                     borderRadius: '8px',
-                    background: 'rgba(16, 185, 129, 0.1)',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
-                    color: '#34D399',
+                    background: '#ecfdf5',
+                    border: '1px solid #a7f3d0',
+                    color: '#047857',
                     fontSize: '13px',
                     textAlign: 'center',
                     fontWeight: 600,

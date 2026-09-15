@@ -55,8 +55,14 @@ class WebSocketClient {
             timestamp: raw.timestamp || new Date().toISOString(),
           };
 
-          // Deduplicate events received within a short window
-          const dedupeKey = `${normalized.type}:${JSON.stringify(payload?.id || payload?.order_number || payload?.phone || normalized.timestamp)}`;
+          // Deduplicate the same event without collapsing future WhatsApp
+          // messages from the same customer. Conversation events commonly
+          // share only a phone number, so their event timestamp/message ID
+          // must take precedence over the phone number.
+          const eventIdentity = normalized.type === 'CONVERSATION_MESSAGE'
+            ? payload?.eventId || payload?.messageId || payload?.providerMessageId || payload?.timestamp || normalized.timestamp
+            : payload?.id || payload?.order_number || payload?.phone || normalized.timestamp;
+          const dedupeKey = `${normalized.type}:${JSON.stringify(eventIdentity)}`;
           if (this.recentEventKeys.has(dedupeKey)) {
             return;
           }

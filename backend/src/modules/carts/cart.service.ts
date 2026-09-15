@@ -13,6 +13,37 @@ export interface ResolveTargetResult {
 export class CartService {
   private abandonmentSchedulerStarted = false;
 
+  async getActiveCartReadOnly(customerId: number): Promise<Cart | null> {
+    const carts = await query<any[]>(`
+      SELECT c.*, m.name as merchant_name
+      FROM carts c
+      LEFT JOIN merchant_branches mb ON mb.id = c.merchant_branch_id
+      LEFT JOIN merchants m ON m.id = mb.merchant_id
+      WHERE c.customer_id = ? AND c.status = 'ACTIVE'
+      ORDER BY c.updated_at DESC LIMIT 1
+    `, [customerId]);
+
+    if (carts.length === 0) {
+      return null;
+    }
+
+    const cartId = carts[0].id;
+    const items = await this.getCartItems(cartId);
+    return {
+      id: cartId,
+      public_id: carts[0].public_id,
+      customer_id: customerId,
+      merchant_branch_id: carts[0].merchant_branch_id,
+      merchant_name: carts[0].merchant_name,
+      status: 'ACTIVE',
+      currency: 'USD',
+      subtotal: Number(carts[0].subtotal || 0),
+      estimated_delivery_fee: Number(carts[0].estimated_delivery_fee || 0),
+      estimated_total: Number(carts[0].estimated_total || 0),
+      items,
+    };
+  }
+
   async getOrCreateActiveCart(customerId: number): Promise<Cart> {
     const carts = await query<any[]>(`
       SELECT c.*, m.name as merchant_name

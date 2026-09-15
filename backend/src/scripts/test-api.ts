@@ -100,7 +100,29 @@ export async function runApiTests(): Promise<boolean> {
       'Operational APIs reject unauthenticated access with 401 Unauthorized (G-051)'
     );
 
-    // 7. Authenticated Live Orders
+    // 7. Internal People Directory and Live WhatsApp Inbox
+    const contactsRes = await fetch(`${baseUrl}/api/dashboard/contacts`, { headers: authHeaders });
+    const contactsData: any = await contactsRes.json();
+    const inboxRes = await fetch(`${baseUrl}/api/whatsapp/inbox/conversations`, { headers: authHeaders });
+    const inboxData: any = await inboxRes.json();
+    assert(
+      contactsRes.status === 200 &&
+      contactsData.data?.counts?.users >= 1 &&
+      contactsData.data?.counts?.drivers >= 3 &&
+      contactsData.data?.counts?.customers >= 2 &&
+      Array.isArray(contactsData.data?.users) &&
+      Array.isArray(contactsData.data?.drivers) &&
+      Array.isArray(contactsData.data?.customers),
+      'GET /api/dashboard/contacts returns internal user, driver, and customer counts and full contact records',
+      contactsData
+    );
+    assert(
+      inboxRes.status === 200 && Array.isArray(inboxData.data),
+      'GET /api/whatsapp/inbox/conversations returns authenticated live inbox data',
+      inboxData
+    );
+
+    // 8. Authenticated Live Orders
     const ordersRes = await fetch(`${baseUrl}/api/orders`, { headers: authHeaders });
     const ordersData: any = await ordersRes.json();
     assert(

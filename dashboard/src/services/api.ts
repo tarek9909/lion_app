@@ -26,6 +26,7 @@ export interface Order {
   merchant_name: string;
   driver_code?: string | null;
   driver_name?: string | null;
+  driver_whatsapp_number?: string | null;
   address_label: string;
   formatted_address: string;
   delivery_notes?: string | null;
@@ -65,6 +66,7 @@ export interface DriverInfo {
   public_id: string;
   display_code: string;
   full_name_private: string;
+  phone_private?: string | null;
   whatsapp_number: string;
   status: string;
   availability_status: string;
@@ -91,6 +93,44 @@ export interface MerchantInfo {
   address?: string;
   preparation_minutes?: number;
   delivery_fee?: number;
+}
+
+export interface WhatsAppConversationSummary {
+  id: number;
+  public_id: string;
+  channel: string;
+  status: string;
+  ai_mode: string;
+  last_message_at: string | null;
+  created_at: string;
+  whatsapp_number: string;
+  display_name: string | null;
+  message_count: number;
+  inbound_count: number;
+  last_message: string | null;
+  last_message_direction: 'INBOUND' | 'OUTBOUND' | null;
+  last_message_type: string | null;
+}
+
+export interface WhatsAppMessage {
+  id: number;
+  conversation_id: number;
+  direction: 'INBOUND' | 'OUTBOUND';
+  sender_type: string;
+  sender_reference?: string | null;
+  message_type: string;
+  text_body: string | null;
+  status: string;
+  created_at: string;
+  media_url?: string | null;
+  media_transcript?: string | null;
+}
+
+export interface DashboardContacts {
+  counts: { users: number; drivers: number; customers: number };
+  users: Array<{ id: number; public_id: string; full_name: string; email: string | null; username: string | null; phone: string | null; status: string; roles: string | null }>;
+  drivers: Array<{ id: number; public_id: string; display_code: string; full_name_private: string | null; phone_private: string | null; whatsapp_number: string; status: string; availability_status: string; vehicle_type: string | null }>;
+  customers: Array<{ id: number; public_id: string; display_name: string | null; whatsapp_number: string; status: string; created_at: string; last_order_at: string | null; total_completed_orders: number; lifetime_spend: number }>;
 }
 
 // Token management & authenticated fetch helper (G-051)
@@ -242,35 +282,42 @@ export const api = {
     return data.data || [];
   },
 
-  // Merchants (G-057)
-  async getMerchants(): Promise<MerchantInfo[]> {
-    const res = await fetch(`${API_BASE}/merchants`);
+  // Live WhatsApp Inbox
+  async getWhatsAppConversations(): Promise<WhatsAppConversationSummary[]> {
+    const res = await authFetch(`${API_BASE}/whatsapp/inbox/conversations`);
     const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Failed to load WhatsApp conversations');
     return data.data || [];
   },
 
-  // WhatsApp Conversational AI (Public simulator)
-  async sendWhatsAppMessage(phone: string, message: string, mediaType: 'text' | 'image' | 'audio' = 'text'): Promise<any> {
-    const res = await fetch(`${API_BASE}/conversations/message`, {
+  async getWhatsAppMessages(conversationId: number): Promise<WhatsAppMessage[]> {
+    const res = await authFetch(`${API_BASE}/whatsapp/inbox/conversations/${conversationId}/messages`);
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Failed to load WhatsApp messages');
+    return data.data || [];
+  },
+
+  async sendWhatsAppReply(conversationId: number, text: string): Promise<any> {
+    const res = await authFetch(`${API_BASE}/whatsapp/inbox/conversations/${conversationId}/reply`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, message, mediaType }),
+      body: JSON.stringify({ text }),
     });
-    const data = await res.json().catch(() => ({}));
-
-    // The backend returns { success: false, error: { message } } for
-    // provider/database failures. Do not pass undefined to the simulator.
-    if (!res.ok || data.success === false || !data.data) {
-      throw new Error(
-        data.error?.message || `Conversation request failed (HTTP ${res.status})`
-      );
-    }
-
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'WhatsApp reply failed');
     return data.data;
   },
 
-  async getConversationHistory(phone: string): Promise<any[]> {
-    const res = await fetch(`${API_BASE}/conversations/${phone}/history`);
+  // Internal People & Contacts
+  async getDashboardContacts(): Promise<DashboardContacts> {
+    const res = await authFetch(`${API_BASE}/dashboard/contacts`);
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Failed to load contacts');
+    return data.data;
+  },
+
+  // Merchants (G-057)
+  async getMerchants(): Promise<MerchantInfo[]> {
+    const res = await fetch(`${API_BASE}/merchants`);
     const data = await res.json();
     return data.data || [];
   },

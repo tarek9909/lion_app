@@ -101,7 +101,7 @@ export async function driverDeliverOrder(req: Request, res: Response) {
 export async function getDrivers(req: Request, res: Response) {
   try {
     const drivers = await query<any[]>(`
-      SELECT d.id, d.public_id, d.display_code, d.full_name_private, d.whatsapp_number, d.status,
+      SELECT d.id, d.public_id, d.display_code, d.full_name_private, d.phone_private, d.whatsapp_number, d.status,
              d.availability_status, d.vehicle_type, d.rating, d.current_order_count,
              dl.latitude, dl.longitude, dl.recorded_at as location_recorded_at,
              active.id as active_order_id, active.status as active_order_status,

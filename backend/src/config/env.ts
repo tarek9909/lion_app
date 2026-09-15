@@ -16,6 +16,7 @@ const envSchema = z.object({
   DASHBOARD_URL: z.string().default('http://localhost:5173'),
   JWT_SECRET: z.string().default('lion_demo_jwt_secret_key_2026_super_secure'),
   WHATSAPP_PHONE_NUMBER_ID: z.string().default('1092837465'),
+  WHATSAPP_GRAPH_API_VERSION: z.string().default('v25.0'),
   WHATSAPP_VERIFY_TOKEN: z.string().default('lion_demo_verify_token_2026'),
   WHATSAPP_ACCESS_TOKEN: z.string().default(''),
   WHATSAPP_APP_SECRET: z.string().default('lion_demo_meta_app_secret_2026'),
@@ -25,9 +26,17 @@ const envSchema = z.object({
   VISION_PROVIDER: z.enum(['VISION_API', 'FIXTURE']).default('FIXTURE'),
   OPENAI_API_KEY: z.string().default(''),
   AI_PROVIDER: z.enum(['smart_nlu', 'gemini']).default('smart_nlu'),
+  AI_ROUTING_MODE: z.enum(['STABLE_ONLY', 'SHADOW', 'CANARY', 'CANDIDATE_ONLY']).default('STABLE_ONLY'),
+  AI_STABLE_PROVIDER: z.enum(['smart_nlu', 'gemini']).default('smart_nlu'),
+  AI_CANDIDATE_PROVIDER: z.enum(['smart_nlu', 'gemini']).default('gemini'),
+  AI_CANARY_PERCENTAGE: z.string().default('0').transform((val) => Math.max(0, Math.min(100, parseInt(val, 10) || 0))),
   AI_API_KEY: z.string().default(''),
   GEMINI_API_KEY: z.string().default(''),
   GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
+  GEMINI_REQUEST_TIMEOUT_MS: z.string().default('120000').transform((val) => parseInt(val, 10)),
+  WHATSAPP_WORKER_POLL_MS: z.string().default('750').transform((val) => parseInt(val, 10)),
+  WHATSAPP_WORKER_MAX_RETRIES: z.string().default('3').transform((val) => parseInt(val, 10)),
+  WHATSAPP_WORKER_STALE_SECONDS: z.string().default('600').transform((val) => parseInt(val, 10)),
   LBP_PER_USD: z.string().default('89500').transform((val) => parseInt(val, 10)),
 });
 
@@ -56,6 +65,7 @@ export const config = {
   dashboardUrl: env.DASHBOARD_URL,
   whatsapp: {
     phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
+    graphApiVersion: env.WHATSAPP_GRAPH_API_VERSION,
     verifyToken: env.WHATSAPP_VERIFY_TOKEN,
     accessToken: env.WHATSAPP_ACCESS_TOKEN,
     appSecret: env.WHATSAPP_APP_SECRET,
@@ -72,6 +82,16 @@ export const config = {
     apiKey: env.AI_API_KEY,
     geminiApiKey: env.GEMINI_API_KEY,
     geminiModel: env.GEMINI_MODEL,
+    geminiRequestTimeoutMs: env.GEMINI_REQUEST_TIMEOUT_MS,
+    routingMode: env.AI_ROUTING_MODE,
+    stableProvider: env.AI_STABLE_PROVIDER,
+    candidateProvider: env.AI_CANDIDATE_PROVIDER,
+    canaryPercentage: env.AI_CANARY_PERCENTAGE,
+  },
+  whatsappWorker: {
+    pollMs: env.WHATSAPP_WORKER_POLL_MS,
+    maxRetries: env.WHATSAPP_WORKER_MAX_RETRIES,
+    staleSeconds: env.WHATSAPP_WORKER_STALE_SECONDS,
   },
   settlement: {
     lbpPerUsd: env.LBP_PER_USD,
@@ -114,20 +134,48 @@ export function validateStartupConfig(overrideConfig?: any): { whatsappValid: bo
     console.log('[Startup Config] Media Mode: FIXTURE (Deterministic demo boundaries active)');
   }
 
-  if (targetConfig.ai?.provider === 'gemini') {
-    const geminiKey = targetConfig.ai.geminiApiKey;
-    const hasGeminiKey = Boolean(geminiKey) &&
-      !geminiKey.startsWith('demo_') &&
-      geminiKey !== 'placeholder' &&
-      geminiKey !== 'your_gemini_api_key_here' &&
-      geminiKey !== 'demo_gemini_api_key_placeholder';
-    if (!hasGeminiKey) {
-      throw new Error(
-        'Startup Error: AI_PROVIDER is set to gemini but GEMINI_API_KEY is missing or placeholder.'
-      );
+  const aiRoutingMode = targetConfig.ai?.routingMode || (targetConfig.ai?.provider === 'gemini' ? 'CANDIDATE_ONLY' : 'STABLE_ONLY');
+  const stableProvider = targetConfig.ai?.stableProvider || (targetConfig.ai?.provider === 'gemini' ? 'gemini' : 'smart_nlu');
+  const candidateProvider = targetConfig.ai?.candidateProvider || 'gemini';
+  const canaryPct = targetConfig.ai?.canaryPercentage || 0;
+
+  const isGeminiKeyValid = (key?: string): boolean =>
+    Boolean(
+      key &&
+      !key.startsWith('demo_') &&
+      key !== 'placeholder' &&
+      key !== 'your_gemini_api_key_here' &&
+      key !== 'demo_gemini_api_key_placeholder'
+    );
+
+  const geminiHasKey = isGeminiKeyValid(targetConfig.ai?.geminiApiKey);
+
+  // Check if stable provider is gemini and requires key
+  const stableRequiresGemini = (aiRoutingMode === 'STABLE_ONLY' || aiRoutingMode === 'SHADOW' || (aiRoutingMode === 'CANARY' && canaryPct < 100)) && stableProvider === 'gemini';
+  if (stableRequiresGemini && !geminiHasKey) {
+    throw new Error('Startup Error: AI_PROVIDER is set to gemini (stable), but GEMINI_API_KEY is missing or placeholder.');
+  }
+
+  // Check if candidate provider in CANDIDATE_ONLY mode requires key
+  const candidateOnlyRequiresGemini = aiRoutingMode === 'CANDIDATE_ONLY' && candidateProvider === 'gemini';
+  if (candidateOnlyRequiresGemini && !geminiHasKey) {
+    throw new Error('Startup Error: AI_PROVIDER is set to gemini (CANDIDATE_ONLY), but GEMINI_API_KEY is missing or placeholder.');
+  }
+
+
+  // If candidate provider is gemini in SHADOW or CANARY mode, log safe fallback warning
+  if (candidateProvider === 'gemini' && !geminiHasKey) {
+    if (aiRoutingMode === 'SHADOW') {
+      console.warn('[Startup Config] Warning: AI routing mode is SHADOW with gemini candidate, but GEMINI_API_KEY is missing or placeholder. Shadow execution will safely skip.');
+    } else if (aiRoutingMode === 'CANARY' && canaryPct > 0) {
+      console.warn('[Startup Config] Warning: AI routing mode is CANARY with gemini candidate, but GEMINI_API_KEY is missing or placeholder. Canary users will safely fallback to stable provider.');
     }
+  }
+
+  if (stableRequiresGemini || candidateOnlyRequiresGemini) {
+    aiValid = geminiHasKey;
   } else {
-    console.log('[Startup Config] AI Provider: smart_nlu (Local deterministic chatbot active)');
+    console.log(`[Startup Config] AI Routing: ${aiRoutingMode} (Stable: ${stableProvider}, Candidate: ${candidateProvider})`);
   }
 
   return { whatsappValid, mediaValid, aiValid };

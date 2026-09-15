@@ -66,7 +66,7 @@ export class WhatsAppService {
       return { ok: false, error: 'Credentials not configured (EXTERNAL VERIFICATION PENDING)' };
     }
     try {
-      const res = await this.fetchFn(`https://graph.facebook.com/v18.0/${config.whatsapp.phoneNumberId}`, {
+      const res = await this.fetchFn(`https://graph.facebook.com/${config.whatsapp.graphApiVersion}/${config.whatsapp.phoneNumberId}`, {
         headers: { Authorization: `Bearer ${config.whatsapp.accessToken}` },
       });
       const data = await res.json();
@@ -161,7 +161,13 @@ export class WhatsAppService {
    * Send Outbound WhatsApp Message via Meta Cloud API or Explicit Mock
    * Implements error classification, exponential retry, and status persistence (G-053)
    */
-  async sendMessage(to: string, messageText: string, retryCount: number = 2): Promise<SendMessageResult> {
+  async sendMessage(
+    to: string,
+    messageText: string,
+    retryCount: number = 2,
+    conversationId?: number,
+    persistFailure: boolean = true
+  ): Promise<SendMessageResult> {
     const sanitizedTo = to.replace(/\+/g, '').trim();
 
     // Explicit MOCK mode check (G-053)
@@ -170,7 +176,7 @@ export class WhatsAppService {
       console.log(`[WhatsApp Service Boundary: MOCK] Mocking delivery to ${sanitizedTo}. Outbound: "${messageText.substring(0, 40)}..."`);
 
       // Persist mock outbound message if conversation exists
-      await this.persistOutboundMessage(sanitizedTo, messageId, messageText, 'DELIVERED', 'MOCK_WHATSAPP');
+      await this.persistOutboundMessage(sanitizedTo, messageId, messageText, 'DELIVERED', 'MOCK_WHATSAPP', conversationId);
 
       return {
         success: true,
@@ -191,7 +197,9 @@ export class WhatsAppService {
     if (!isConfigured) {
       const errMsg = 'WHATSAPP_MODE is LIVE but Meta Cloud API credentials are missing or placeholder.';
       console.error(`[WhatsApp Service: LIVE] Error: ${errMsg}`);
-      await this.persistOutboundMessage(sanitizedTo, undefined, messageText, 'FAILED', 'META_CLOUD_API');
+      if (persistFailure) {
+        await this.persistOutboundMessage(sanitizedTo, undefined, messageText, 'FAILED', 'META_CLOUD_API', conversationId);
+      }
       return {
         success: false,
         error: errMsg,
@@ -201,7 +209,7 @@ export class WhatsAppService {
       };
     }
 
-    const url = `https://graph.facebook.com/v18.0/${config.whatsapp.phoneNumberId}/messages`;
+    const url = `https://graph.facebook.com/${config.whatsapp.graphApiVersion}/${config.whatsapp.phoneNumberId}/messages`;
     const payload = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -231,7 +239,9 @@ export class WhatsAppService {
           const classification = classifyMetaError(response.status, data);
           if (classification.isPermanent) {
             console.warn(`[WhatsApp Service] Permanent Meta Error ${response.status} (${classification.category}):`, data);
-            await this.persistOutboundMessage(sanitizedTo, undefined, messageText, 'FAILED', 'META_CLOUD_API');
+            if (persistFailure) {
+              await this.persistOutboundMessage(sanitizedTo, undefined, messageText, 'FAILED', 'META_CLOUD_API', conversationId);
+            }
             return {
               success: false,
               error: `Meta Cloud API ${classification.category}: ${JSON.stringify(data)}`,
@@ -246,7 +256,7 @@ export class WhatsAppService {
 
         const messageId = data.messages?.[0]?.id || `wamid.${Date.now()}`;
         console.log(`[WhatsApp Service: LIVE] Sent outbound message to ${sanitizedTo}, ID: ${messageId}`);
-        await this.persistOutboundMessage(sanitizedTo, messageId, messageText, 'SENT', 'META_CLOUD_API');
+        await this.persistOutboundMessage(sanitizedTo, messageId, messageText, 'SENT', 'META_CLOUD_API', conversationId);
 
         return {
           success: true,
@@ -259,7 +269,9 @@ export class WhatsAppService {
         attempt++;
         console.warn(`[WhatsApp Service] Outbound message attempt ${attempt} failed:`, error.message);
         if (attempt > retryCount) {
-          await this.persistOutboundMessage(sanitizedTo, undefined, messageText, 'FAILED', 'META_CLOUD_API');
+          if (persistFailure) {
+            await this.persistOutboundMessage(sanitizedTo, undefined, messageText, 'FAILED', 'META_CLOUD_API', conversationId);
+          }
           return {
             success: false,
             error: error.message,
@@ -282,20 +294,65 @@ export class WhatsAppService {
     };
   }
 
-  private async persistOutboundMessage(phone: string, providerMsgId: string | undefined, body: string, status: string, provider: string) {
+  async recordOutboundFailure(to: string, messageText: string, conversationId?: number): Promise<void> {
+    await this.persistOutboundMessage(
+      to.replace(/\+/g, '').trim(),
+      undefined,
+      messageText,
+      'FAILED',
+      'META_CLOUD_API',
+      conversationId
+    );
+  }
+
+  async updateOutboundDeliveryStatus(
+    providerMessageId: string,
+    providerStatus: string,
+    errorDetails?: any
+  ): Promise<void> {
+    const normalizedStatus = String(providerStatus || '').toUpperCase();
+    const status = normalizedStatus === 'READ'
+      ? 'READ'
+      : normalizedStatus === 'DELIVERED'
+        ? 'DELIVERED'
+        : normalizedStatus === 'SENT'
+          ? 'SENT'
+          : normalizedStatus === 'FAILED'
+            ? 'FAILED'
+            : null;
+    if (!status || !providerMessageId) return;
+
+    await execute(
+      `UPDATE messages
+       SET status = ?,
+           delivered_at = CASE WHEN ? IN ('DELIVERED', 'READ') THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
+           read_at = CASE WHEN ? = 'READ' THEN COALESCE(read_at, NOW()) ELSE read_at END,
+           metadata_json = CASE WHEN ? = 'FAILED' AND ? IS NOT NULL
+             THEN JSON_SET(COALESCE(metadata_json, JSON_OBJECT()), '$.provider_error', CAST(? AS JSON))
+             ELSE metadata_json END
+       WHERE provider = 'META_CLOUD_API' AND provider_message_id = ?
+         AND direction = 'OUTBOUND'`,
+      [status, status, status, status, errorDetails ? JSON.stringify(errorDetails) : null, errorDetails ? JSON.stringify(errorDetails) : null, providerMessageId]
+    );
+  }
+
+  private async persistOutboundMessage(phone: string, providerMsgId: string | undefined, body: string, status: string, provider: string, conversationId?: number) {
     try {
-      const convs = await query<any[]>(`
-        SELECT id FROM conversations WHERE customer_id = (
-          SELECT id FROM customers WHERE whatsapp_number = ? LIMIT 1
-        ) ORDER BY id DESC LIMIT 1
-      `, [phone]);
+      const convs = conversationId
+        ? await query<any[]>(`SELECT id FROM conversations WHERE id = ? LIMIT 1`, [conversationId])
+        : await query<any[]>(`
+          SELECT id FROM conversations WHERE customer_id = (
+            SELECT id FROM customers WHERE whatsapp_number = ? LIMIT 1
+          ) ORDER BY id DESC LIMIT 1
+        `, [phone]);
 
       if (convs.length > 0) {
         await execute(`
           INSERT INTO messages 
-          (public_id, conversation_id, provider, provider_message_id, direction, sender_type, message_type, text_body, status, sent_at)
-          VALUES (?, ?, ?, ?, 'OUTBOUND', 'SYSTEM', 'TEXT', ?, ?, NOW())
+          (public_id, conversation_id, provider, provider_message_id, direction, sender_type, sender_reference, message_type, text_body, status, sent_at, processed_at)
+          VALUES (?, ?, ?, ?, 'OUTBOUND', 'BUSINESS', 'LION_DASHBOARD_OR_AI', 'TEXT', ?, ?, NOW(), NOW())
         `, [crypto.randomUUID(), convs[0].id, provider, providerMsgId || null, body, status]);
+        await execute(`UPDATE conversations SET last_message_at = NOW() WHERE id = ?`, [convs[0].id]);
       }
     } catch (e) {
       // Non-fatal telemetry persistence

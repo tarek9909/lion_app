@@ -75,7 +75,7 @@ export const AnalyticsView: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', height: 'calc(100vh - 100px)', overflowY: 'auto' }}>
+    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}>
       <div>
         <h2 style={{ fontSize: '20px', margin: 0 }}>Executive Real-Time Analytics</h2>
         <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>
@@ -103,7 +103,7 @@ export const AnalyticsView: React.FC = () => {
                   <Icon size={18} color={kpi.color} />
                 </div>
               </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, color: '#FFFFFF', letterSpacing: '-0.02em', marginBottom: '4px' }}>
+              <div style={{ fontSize: '28px', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', marginBottom: '4px' }}>
                 {kpi.value}
               </div>
               <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
@@ -118,46 +118,46 @@ export const AnalyticsView: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '20px' }}>
         {/* Network Status */}
         <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <h3 style={{ fontSize: '15px', color: '#FFFFFF', margin: 0 }}>Operational Network Health</h3>
+          <h3 style={{ fontSize: '15px', color: 'var(--text-primary)', margin: 0 }}>Operational Network Health</h3>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#f8fafc', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Store size={16} color="#FBBF24" />
+                <Store size={16} color="#d97706" />
                 <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Active Merchants</span>
               </div>
-              <strong style={{ color: '#FFFFFF' }}>{data?.activeMerchants ?? 0} partners</strong>
+              <strong style={{ color: 'var(--text-primary)' }}>{data?.activeMerchants ?? 0} partners</strong>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#f8fafc', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Store size={16} color="#F59E0B" />
+                <Store size={16} color="#d97706" />
                 <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Operating Branches</span>
               </div>
-              <strong style={{ color: '#FFFFFF' }}>{data?.activeBranches ?? 0} branches</strong>
+              <strong style={{ color: 'var(--text-primary)' }}>{data?.activeBranches ?? 0} branches</strong>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#f8fafc', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Bike size={16} color="#34D399" />
+                <Bike size={16} color="#059669" />
                 <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Active Couriers</span>
               </div>
-              <strong style={{ color: '#FFFFFF' }}>{data?.activeDrivers ?? 0} online</strong>
+              <strong style={{ color: 'var(--text-primary)' }}>{data?.activeDrivers ?? 0} online</strong>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#f8fafc', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Users size={16} color="#38BDF8" />
+                <Users size={16} color="#0284c7" />
                 <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Conversations Engaged</span>
               </div>
-              <strong style={{ color: '#FFFFFF' }}>{data?.whatsappConversations ?? 0} chats</strong>
+              <strong style={{ color: 'var(--text-primary)' }}>{data?.whatsappConversations ?? 0} chats</strong>
             </div>
           </div>
         </div>
 
         {/* Recent Transaction Log */}
         <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <h3 style={{ fontSize: '15px', color: '#FFFFFF', margin: 0 }}>Recent Delivered Orders</h3>
+          <h3 style={{ fontSize: '15px', color: 'var(--text-primary)', margin: 0 }}>Recent Delivered Orders</h3>
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {data?.recentOrders && data.recentOrders.length > 0 ? (
@@ -167,19 +167,19 @@ export const AnalyticsView: React.FC = () => {
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   padding: '10px 14px',
-                  background: 'rgba(255, 255, 255, 0.02)',
+                  background: '#ffffff',
                   border: '1px solid var(--border-subtle)',
                   borderRadius: '8px',
                   fontSize: '13px',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#FCD34D' }}>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#b45309' }}>
                       #{ord.order_number}
                     </span>
                     <span style={{ color: 'var(--text-secondary)' }}>{ord.merchant_name}</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                    <span style={{ fontWeight: 700, color: '#FFFFFF' }}>${parseFloat(ord.grand_total).toFixed(2)}</span>
+                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>${parseFloat(ord.grand_total).toFixed(2)}</span>
                     <span className="badge badge-emerald">Delivered</span>
                   </div>
                 </div>

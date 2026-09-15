@@ -51,31 +51,31 @@ export const ManagementAiView: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: 'calc(100vh - 100px)', overflowY: 'auto' }}>
+    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}>
       {/* Header Banner */}
-      <div className="glass-panel" style={{ padding: '20px', borderLeft: '4px solid #A855F7', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div className="glass-panel" style={{ padding: '20px', borderLeft: '4px solid #9333ea', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{
             width: '42px',
             height: '42px',
             borderRadius: '12px',
-            background: 'rgba(168, 85, 247, 0.15)',
-            border: '1px solid rgba(168, 85, 247, 0.3)',
+            background: '#faf5ff',
+            border: '1px solid #e9d5ff',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
           }}>
-            <Bot size={22} color="#C084FC" />
+            <Bot size={22} color="#9333ea" />
           </div>
           <div>
-            <h2 style={{ fontSize: '18px', margin: 0, color: '#FFFFFF' }}>Management AI Intelligence Copilot</h2>
+            <h2 style={{ fontSize: '18px', margin: 0, color: 'var(--text-primary)' }}>Management AI Intelligence Copilot</h2>
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>
               Ask executive questions in plain English. Queries live SQL telemetry across orders, rejections, couriers, and unmet customer demand.
             </p>
           </div>
         </div>
 
-        <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#C084FC', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+        <span className="badge" style={{ background: '#faf5ff', color: '#9333ea', border: '1px solid #e9d5ff' }}>
           <Sparkles size={12} /> Executive Copilot
         </span>
       </div>
@@ -90,7 +90,7 @@ export const ManagementAiView: React.FC = () => {
             className="btn-secondary"
             style={{ fontSize: '12px', padding: '6px 12px' }}
           >
-            <HelpCircle size={13} color="#C084FC" />
+            <HelpCircle size={13} color="#9333ea" />
             <span>"{q}"</span>
           </button>
         ))}
@@ -101,20 +101,20 @@ export const ManagementAiView: React.FC = () => {
         {interactions.map((item, idx) => (
           <div key={idx} className="glass-panel" style={{ padding: '18px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '14px', fontWeight: 600, color: '#FFFFFF' }}>Q: "{item.question}"</span>
+              <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>Q: "{item.question}"</span>
               {item.intent && (
-                <span style={{ fontSize: '10px', fontFamily: 'monospace', background: 'rgba(255, 255, 255, 0.08)', padding: '2px 6px', borderRadius: '4px', color: '#9CA3AF' }}>
+                <span style={{ fontSize: '10px', fontFamily: 'monospace', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#64748b' }}>
                   INTENT: {item.intent}
                 </span>
               )}
             </div>
 
             <div style={{
-              background: 'rgba(255, 255, 255, 0.03)',
+              background: '#f8fafc',
               padding: '12px 16px',
               borderRadius: '8px',
               border: '1px solid var(--border-subtle)',
-              color: '#E5E7EB',
+              color: 'var(--text-primary)',
               fontSize: '14px',
               lineHeight: '1.5',
             }}>
@@ -125,7 +125,7 @@ export const ManagementAiView: React.FC = () => {
 
         {loading && (
           <div className="glass-panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div className="pulse-dot" style={{ backgroundColor: '#C084FC' }} />
+            <div className="pulse-dot" style={{ backgroundColor: '#9333ea' }} />
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
               Analyzing operational data in MySQL...
             </span>
@@ -137,11 +137,11 @@ export const ManagementAiView: React.FC = () => {
       <div style={{
         position: 'sticky',
         bottom: 0,
-        background: 'rgba(16, 21, 34, 0.95)',
-        backdropFilter: 'blur(16px)',
+        background: '#ffffff',
         padding: '14px',
         borderRadius: '12px',
         border: '1px solid var(--border-subtle)',
+        boxShadow: 'var(--shadow-md)',
         display: 'flex',
         gap: '10px',
       }}>
@@ -154,11 +154,11 @@ export const ManagementAiView: React.FC = () => {
           onKeyDown={(e) => e.key === 'Enter' && askQuestion(inputQuery)}
           style={{
             flex: 1,
-            background: 'rgba(255, 255, 255, 0.05)',
-            border: '1px solid var(--border-subtle)',
+            background: '#ffffff',
+            border: '1px solid var(--border-medium)',
             borderRadius: '8px',
             padding: '10px 14px',
-            color: '#FFFFFF',
+            color: 'var(--text-primary)',
             fontSize: '14px',
             outline: 'none',
           }}
@@ -168,7 +168,7 @@ export const ManagementAiView: React.FC = () => {
           onClick={() => askQuestion(inputQuery)}
           disabled={loading || !inputQuery.trim()}
           className="btn-primary"
-          style={{ background: 'linear-gradient(135deg, #C084FC, #9333EA)', color: '#FFFFFF' }}
+          style={{ backgroundColor: '#9333ea', color: '#ffffff' }}
         >
           <Send size={15} />
           <span>Ask Copilot</span>

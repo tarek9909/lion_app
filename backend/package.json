@@ -20,9 +20,19 @@
     "test:rehearsal": "tsx src/scripts/test-rehearsal.ts",
     "test:config-matrix": "tsx src/scripts/test-config-matrix.ts",
     "test:gemini": "tsx src/scripts/test-gemini.ts",
+    "test:ai-edgecases": "tsx src/scripts/test-ai-edgecases.ts",
     "test:browser": "tsx src/scripts/test-browser-e2e.ts",
     "test:demo-gaps": "tsx src/scripts/test-demo-gaps.ts",
-    "demo:backup": "tsx src/scripts/demo-backup-scenario.ts"
+    "demo:backup": "tsx src/scripts/demo-backup-scenario.ts",
+    "test:ai-plan": "tsx src/scripts/test-ai-plan.ts",
+    "test:contract": "tsx src/scripts/test-behavior-contract.ts",
+    "test:telemetry": "tsx src/scripts/test-telemetry-redaction.ts",
+    "test:datasets": "tsx src/scripts/test-dataset-validation.ts",
+    "test:eval": "tsx src/scripts/test-evaluator.ts",
+    "test:search-quality": "tsx src/scripts/test-catalog-search-quality.ts",
+    "test:media-eval": "tsx src/scripts/test-media-evaluation.ts",
+    "test:mgmt-ai": "tsx src/scripts/test-management-ai.ts",
+    "test:routing": "tsx src/scripts/test-shadow-canary.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
