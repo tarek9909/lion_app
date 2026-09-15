@@ -44,9 +44,9 @@ export class AiTelemetryService {
       const outputSummary = PiiRedactor.redactText(data.rawOutput).slice(0, 2000);
 
       const structuredPayload = {
-        prompt_version: data.promptVersion || '2026-09-15.v1',
+        prompt_version: data.promptVersion || '2026-09-15.v2',
         behavior_version: BEHAVIOR_CONTRACT_VERSION,
-        tool_schema_version: data.toolSchemaVersion || '2026-09-15.v1',
+        tool_schema_version: data.toolSchemaVersion || '2026-09-15.v2',
         detected_language: data.detectedLanguage || 'unknown',
         detected_intent: data.detectedIntent || 'UNKNOWN',
         human_handoff: Boolean(data.humanHandoff),

@@ -27,21 +27,16 @@ import { aiTelemetryService } from './telemetry/ai-telemetry.service.js';
 import { calculateGeminiCost } from './telemetry/gemini-pricing.js';
 import { randomUUID } from 'node:crypto';
 import { INTERACTIVE_NOT_FOUND_REPLY, isNotFoundError, resultHasNoCatalogMatches } from './interactive-not-found.js';
+import {
+  detectSenderLanguage,
+  getLanguageSafeFallback,
+  isResponseInSenderLanguage,
+  SenderLanguage,
+} from './sender-language.js';
+import { localizeReplyText } from './response-localizer.js';
 
 export function detectLanguage(text: string): string {
-  const clean = (text || '').trim();
-  const hasArabicScript = /[\u0600-\u06FF]/.test(clean);
-  const hasLatin = /[a-zA-Z]/.test(clean);
-  const hasArabiziMarkers =
-    /\b(?:shou|chou|kifak|wein|wen|bade|baddi|akid|akeed|tamam|habibi|ya3tik|ma2liyeh|3al|el|baddel|badel)\b|[23578]/.test(
-      clean.toLowerCase()
-    );
-
-  if (hasArabicScript && hasLatin) return 'mixed';
-  if (hasArabicScript) return 'ar';
-  if (hasArabiziMarkers) return 'arabizi';
-  if (hasLatin) return 'en';
-  return 'arabizi';
+  return detectSenderLanguage(text);
 }
 
 export interface GeminiMessagePart {
@@ -240,6 +235,13 @@ export class GeminiService {
       };
     }
 
+    // Detect the language from this sender turn. A stored preference is only
+    // a fallback for history; it must never override the latest message.
+    const responseLanguage: SenderLanguage = detectSenderLanguage(text);
+    if (customer.id > 0) {
+      state.preferredLanguage = responseLanguage;
+    }
+
     // 1. Resolve pending clarification if customer answered it directly
     if (state.stage === 'AWAITING_CLARIFICATION' && state.pendingClarification) {
       const lower = text.toLowerCase().trim();
@@ -274,7 +276,10 @@ export class GeminiService {
             const refreshedCart = await cartService.getOrCreateActiveCart(customer.id);
             const totals = await cartService.recalculateCart(cart.id);
             const targetName = matchedTarget === 'coke' ? 'Coke Zero' : 'Crispy Chicken Meal';
-            const reply = `Got it! Updated the ${targetName} to **${requestedVariant}**${updateRes.newPrice ? ` ($${updateRes.newPrice.toFixed(2)})` : ''}.\n\nYour cart total is **$${totals.total.toFixed(2)}**. Where should we deliver this? (e.g. *Home* / *3al Bet*)`;
+            const reply = localizeReplyText(
+              `Got it! Updated the ${targetName} to **${requestedVariant}**${updateRes.newPrice ? ` ($${updateRes.newPrice.toFixed(2)})` : ''}.\n\nYour cart total is **$${totals.total.toFixed(2)}**. Where should we deliver this? (e.g. *Home* / *3al Bet*)`,
+              responseLanguage,
+            );
 
             await saveConversationState(customer.id, state);
             await this.appendHistory(customer.id, text, reply);
@@ -292,7 +297,7 @@ export class GeminiService {
             state.pendingClarification = null;
             state.stage = 'EDITING_CART';
             const targetName = matchedTarget === 'coke' ? 'Coke Zero' : 'Crispy Chicken Meal';
-            const reply = `[Shadow Simulation] Clarification resolved: Updated ${targetName}`;
+            const reply = localizeReplyText(`[Shadow Simulation] Clarification resolved: Updated ${targetName}`, responseLanguage);
             return {
               intent: 'CLARIFICATION_RESOLVED',
               confidence: 0.98,
@@ -333,7 +338,7 @@ export class GeminiService {
     });
 
     const tools = getAuthoritativeGeminiToolDeclarations();
-    const systemInstruction = getGeminiSystemPrompt(sanitizeStateSnapshot(state));
+    const systemInstruction = getGeminiSystemPrompt(sanitizeStateSnapshot(state), responseLanguage);
 
     let primaryIntent: CanonicalIntent = 'GREETING';
     let actionTaken: string | undefined;
@@ -359,7 +364,7 @@ export class GeminiService {
         tools,
         generationConfig: {
           temperature: 0.2,
-          maxOutputTokens: 1000,
+          maxOutputTokens: config.ai.geminiMaxOutputTokens,
         },
       };
 
@@ -532,10 +537,21 @@ export class GeminiService {
     }
 
     if (interactiveNotFound) {
-      finalText = INTERACTIVE_NOT_FOUND_REPLY;
+      finalText = localizeReplyText(INTERACTIVE_NOT_FOUND_REPLY, responseLanguage);
     } else if (!finalText) {
-      finalText =
-        'I am here to help you with your order from Lion Delivery! What would you like to eat today? 🦁';
+      finalText = getLanguageSafeFallback(responseLanguage);
+    } else {
+      // Gemini is authoritative for facts, but this deterministic boundary
+      // translates common safety/status labels if a model response drifts into
+      // English. Product names, merchant names, IDs, prices, and markup stay
+      // untouched.
+      finalText = localizeReplyText(finalText, responseLanguage);
+    }
+
+    // The prompt is the primary language control. This backend boundary keeps
+    // an accidental provider-language drift from reaching WhatsApp.
+    if (!isResponseInSenderLanguage(responseLanguage, finalText)) {
+      finalText = getLanguageSafeFallback(responseLanguage);
     }
 
     // Detect fallback intent from keywords if not resolved through tools
@@ -562,52 +578,57 @@ export class GeminiService {
     const detectedLang = detectLanguage(text);
     const turnSuccess = !recordedToolResults.some((r) => r.result && r.result.success === false);
 
-    // In shadow mode, do not save state to Redis and do not record inbound/outbound history
-    if (!options?.shadowMode && customer.id > 0) {
-      await saveConversationState(customer.id, state);
-      await this.appendHistory(customer.id, text, finalText);
-    }
+    const toolCallsCombined = recordedToolCalls.map((tc, idx) => ({
+      name: tc.name,
+      args: tc.args,
+      result: recordedToolResults[idx]?.result,
+    }));
 
-    // Record Telemetry
-    try {
-      const toolCallsCombined = recordedToolCalls.map((tc, idx) => ({
-        name: tc.name,
-        args: tc.args,
-        result: recordedToolResults[idx]?.result,
-      }));
+    // These independent persistence operations used to run one after another
+    // after Gemini finished. Run them together so response latency is bounded
+    // by the slowest side effect, not their sum.
+    const stateAndHistoryPromise = !options?.shadowMode && customer.id > 0
+      ? Promise.all([
+          saveConversationState(customer.id, state),
+          this.appendHistory(customer.id, text, finalText),
+        ])
+      : Promise.resolve();
 
-      await aiTelemetryService.recordInteraction({
-        conversationId,
-        aiContext: 'CUSTOMER_WHATSAPP',
-        provider: options?.canary ? 'gemini-canary' : 'gemini',
-        model,
-        interactionType: 'CHAT_TURN',
-        rawInput: text,
-        rawOutput: finalText,
-        detectedIntent: primaryIntent,
-        detectedLanguage: detectedLang,
-        toolCalls: toolCallsCombined,
-        stateBefore: stateBeforeSnapshot,
-        stateAfter: sanitizeStateSnapshot(state),
-        promptVersion: PROMPT_VERSION,
-        toolSchemaVersion: '2.0.0',
-        inputTokens: promptTokensTotal,
-        outputTokens: candidatesTokensTotal,
-        latencyMs: Date.now() - startTime,
-        estimatedCostUsd: costUsd,
-        success: turnSuccess,
-        executionMode: options?.shadowMode ? 'SHADOW' : options?.canary ? 'CANARY' : 'LIVE',
-        requestId,
-      });
-    } catch (telemetryErr) {
+    const telemetryPromise = aiTelemetryService.recordInteraction({
+      conversationId,
+      aiContext: 'CUSTOMER_WHATSAPP',
+      provider: options?.canary ? 'gemini-canary' : 'gemini',
+      model,
+      interactionType: 'CHAT_TURN',
+      rawInput: text,
+      rawOutput: finalText,
+      detectedIntent: primaryIntent,
+      detectedLanguage: detectedLang,
+      toolCalls: toolCallsCombined,
+      stateBefore: stateBeforeSnapshot,
+      stateAfter: sanitizeStateSnapshot(state),
+      promptVersion: PROMPT_VERSION,
+      toolSchemaVersion: '2.0.0',
+      inputTokens: promptTokensTotal,
+      outputTokens: candidatesTokensTotal,
+      latencyMs: Date.now() - startTime,
+      estimatedCostUsd: costUsd,
+      success: turnSuccess,
+      executionMode: options?.shadowMode ? 'SHADOW' : options?.canary ? 'CANARY' : 'LIVE',
+      requestId,
+    }).catch((telemetryErr) => {
       console.warn('[Gemini Service] Error recording turn telemetry:', telemetryErr);
-    }
+    });
 
-    const activeCart =
-      state.cartSummary ||
-      (options?.shadowMode
-        ? await cartService.getActiveCartReadOnly(customer.id)
-        : await cartService.getOrCreateActiveCart(customer.id));
+    const activeCartPromise = state.cartSummary
+      ? Promise.resolve(state.cartSummary)
+      : cartService.getActiveCartReadOnly(customer.id);
+
+    const [, , activeCart] = await Promise.all([
+      stateAndHistoryPromise,
+      telemetryPromise,
+      activeCartPromise,
+    ]);
 
     return {
       replyText: finalText,

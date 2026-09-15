@@ -76,6 +76,22 @@ export async function runConfigMatrixTests() {
     console.log('  ✅ SHADOW mode with missing candidate key fails safely at startup [PASS]');
 
     // -------------------------------------------------------------
+    // 1e: production never starts on the deterministic fallback provider
+    assert.throws(() => {
+      validateStartupConfig({
+        nodeEnv: 'production',
+        whatsapp: { mode: 'MOCK' },
+        media: { mode: 'FIXTURE' },
+        ai: {
+          routingMode: 'STABLE_ONLY',
+          stableProvider: 'smart_nlu',
+          candidateProvider: 'gemini',
+          geminiApiKey: undefined,
+        },
+      });
+    }, /Gemini-only/, 'production rejects Smart NLU routing');
+    console.log('  Production routing is Gemini-only [PASS]');
+
     // Test 2: Runtime Router Behavior Across All Modes
     // -------------------------------------------------------------
     console.log('  Testing router execution matrix across all 4 modes...');
@@ -188,4 +204,3 @@ if (process.argv[1]?.endsWith('test-config-matrix.ts') || process.argv[1]?.endsW
       process.exit(1);
     });
 }
-

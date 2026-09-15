@@ -184,7 +184,7 @@ export async function runFullDemoRehearsalOnce(runNumber: number): Promise<boole
     });
     logLine(`   Transcript: "${audioRes.data.transcript}"`);
     logLine(`   AI Reply: ${audioRes.data.reply.replace(/\n/g, ' ')}`);
-    if (!audioRes.data.reply.includes('Metro Supermarket') && !audioRes.data.reply.includes('voice shopping list')) {
+    if (!audioRes.data.reply.includes('Metro Supermarket') && !audioRes.data.reply.toLowerCase().includes('shopping')) {
       throw new Error('Audio voice note did not trigger basket comparison');
     }
     logLine('   ✅ Audio voice note correctly transcribed and analyzed');

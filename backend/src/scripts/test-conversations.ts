@@ -89,7 +89,7 @@ const testCases: TestCase[] = [
     message: 'bade 2 coke zero w lays w shufle arkhass mahal',
     mediaType: 'audio',
     expectedIntent: 'BASKET_COMPARISON',
-    expectedContentSubstrings: ['Metro Supermarket', 'Coke Zero', 'Lays', 'Total Complete Basket'],
+    expectedContentSubstrings: ['Metro Supermarket', 'Coke Zero', 'Lays', 'Majmou3 l basket kello'],
   },
   {
     id: 12,
@@ -111,7 +111,7 @@ const testCases: TestCase[] = [
     name: 'Saved Address Resolution',
     message: '3al bet',
     expectedIntent: 'ADDRESS_SELECTED',
-    expectedContentSubstrings: ['Home', 'Final Order Summary', 'confirm'],
+    expectedContentSubstrings: ['Home', 'Molakhas el talab l nehe2e', 'confirm'],
   },
   {
     id: 15,

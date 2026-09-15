@@ -82,7 +82,13 @@ export class ShadowCanaryRouter {
     mediaType?: 'text' | 'image' | 'audio' | 'location',
     stableProcessor?: (p: string, m: string, media?: any, options?: ProviderProcessOptions) => Promise<AIProcessResult>,
     options?: ProviderProcessOptions
-  ): Promise<{ result: AIProcessResult; executionMode: 'LIVE' | 'CANARY'; shadowRan: boolean; requestId?: string }> {
+  ): Promise<{
+    result: AIProcessResult;
+    executionMode: 'LIVE' | 'CANARY';
+    shadowRan: boolean;
+    requestId?: string;
+    provider: 'smart_nlu' | 'gemini';
+  }> {
     const effectiveRoutingMode = this.config.routingMode;
     const { candidateProvider, stableProvider } = this.config;
     const requestId = options?.requestId || `req-${randomUUID()}`;
@@ -103,7 +109,7 @@ export class ShadowCanaryRouter {
             : stableProcessor
             ? await stableProcessor(phone, messageText, mediaType, providerOptions)
             : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
-        return { result: fallbackResult, executionMode: 'LIVE', shadowRan: false, requestId };
+        return { result: fallbackResult, executionMode: 'LIVE', shadowRan: false, requestId, provider: stableProvider };
       }
 
       const result =
@@ -113,7 +119,7 @@ export class ShadowCanaryRouter {
           ? await stableProcessor(phone, messageText, mediaType, providerOptions)
           : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
 
-      return { result, executionMode: 'CANARY', shadowRan: false, requestId };
+      return { result, executionMode: 'CANARY', shadowRan: false, requestId, provider: candidateProvider };
     }
 
     // 2. CANDIDATE ONLY MODE (Fails closed if candidate lacks credentials - G-062)
@@ -125,7 +131,7 @@ export class ShadowCanaryRouter {
           ? await stableProcessor(phone, messageText, mediaType, providerOptions)
           : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
 
-      return { result, executionMode: 'LIVE', shadowRan: false, requestId };
+      return { result, executionMode: 'LIVE', shadowRan: false, requestId, provider: candidateProvider };
     }
 
 
@@ -138,7 +144,7 @@ export class ShadowCanaryRouter {
           ? await stableProcessor(phone, messageText, mediaType, providerOptions)
           : await geminiService.processCustomerMessage(phone, messageText, mediaType, providerOptions);
 
-      return { result, executionMode: 'LIVE', shadowRan: false, requestId };
+      return { result, executionMode: 'LIVE', shadowRan: false, requestId, provider: stableProvider };
     }
 
     // 4. SHADOW MODE
@@ -163,7 +169,7 @@ export class ShadowCanaryRouter {
       }
     }
 
-    return { result: liveResult, executionMode: 'LIVE', shadowRan, requestId };
+    return { result: liveResult, executionMode: 'LIVE', shadowRan, requestId, provider: stableProvider };
   }
 
   /**

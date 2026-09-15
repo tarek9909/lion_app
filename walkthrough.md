@@ -52,6 +52,14 @@ It must keep the conversation interactive, ask the actionable question, and neve
 
 When the message is unclear, incomplete, contradictory, or not understandable, the assistant must ask a short clarification question with examples. It must not guess, mutate the cart, select an address, or create an order from an unclear message.
 
+### Sender-language rule
+
+The assistant detects the language of the latest sender message on every turn and replies in that language, including its script. English, Arabic script, Lebanese Arabizi, French, Spanish, German, Italian, Portuguese, Turkish, and common non-Latin scripts are covered by the language policy. Mixed Arabic/Latin messages receive a natural mixed-style reply. A stored customer preference never overrides the language of the current message.
+
+### Response-speed rule
+
+Production uses Gemini as the only AI provider. Routine Gemini replies are capped at a concise 600-token budget, read-only tool calls avoid creating/loading a cart row until needed, and post-response state, history, telemetry, and cart work runs concurrently. This keeps the customer-facing path responsive without bypassing grounding, confirmation, or mutation safety.
+
 ## Verification checklist
 
 Run from the repository root:
@@ -65,13 +73,15 @@ Run from the repository root:
 | Evaluator exact typing and order idempotency | `npm --prefix backend run test:evaluator-safety` | Passed |
 | Catalog retrieval and basket comparison | `npm --prefix backend run test:search-quality` | Passed; no duplicate results, basket cases complete |
 | Not-found and unclear-message behavior | `npm --prefix backend run test:not-found` | Passed |
+| Sender-language detection and response consistency | `npm --prefix backend run test:language` | Passed; English, Arabic, Arabizi, mixed, French, and additional language/script profiles |
+| Gemini-only production routing and response budget | `npm --prefix backend run test:config-matrix` | Passed; Smart NLU rejected in production and routing matrix remains covered |
 | Shadow zero-mutation boundary | `npm --prefix backend run test:shadow-immutability` | Passed |
 | Telemetry redaction and Gemini HTTP failure telemetry | `npm --prefix backend run test:telemetry` | Passed |
 | Provider/routing configuration matrix | `npm --prefix backend run test:config-matrix` | Passed |
 | AI edge-case regression suite | `npm --prefix backend run test:ai-edgecases` | Passed; 31/31 |
 | Full HTTP/WebSocket rehearsal | `npm --prefix backend run test:rehearsal` | Passed; 3 consecutive runs |
-| AI training and audit runner | `npm --prefix backend run test:ai-plan` | Passed; 11/11 suites in disposable MySQL and Redis DB 15 |
-| Full integration runner | `npm --prefix backend run test:all` | Passed; 14/14 suites in disposable MySQL and Redis DB 15 |
+| AI training and audit runner | `npm --prefix backend run test:ai-plan` | Passed; 12/12 suites in disposable MySQL and Redis DB 15 |
+| Full integration runner | `npm --prefix backend run test:all` | Passed; 15/15 suites in disposable MySQL and Redis DB 15 |
 
 Both master runners create a validated disposable database named `lion_delivery_test_<pid>_<timestamp>`, use Redis DB 15, seed it, and remove it in `finally`. They do not use or leave customer data in the shared demo database.
 
@@ -79,6 +89,7 @@ Both master runners create a validated disposable database named `lion_delivery_
 
 - Checkout/state safety: `backend/src/modules/ai/checkout-safety.ts`, `backend/src/modules/ai/ai.service.ts`, `backend/src/modules/ai/tools/ai-tools.executor.ts`.
 - Interactive miss and clarification contract: `backend/src/modules/ai/interactive-not-found.ts`, `backend/src/modules/ai/prompts/gemini.system-prompt.ts`, `backend/src/scripts/test-interactive-not-found.ts`.
+- Sender-language policy and deterministic response localization: `backend/src/modules/ai/sender-language.ts`, `backend/src/modules/ai/response-localizer.ts`, `backend/src/scripts/test-language-consistency.ts`.
 - Shadow telemetry and failure capture: `backend/src/modules/ai/routing/shadow-canary.service.ts`, `backend/src/modules/ai/gemini.service.ts`.
 - Isolated master runners: `backend/src/scripts/test-isolation.ts`, `backend/src/scripts/test-ai-plan.ts`, `backend/src/scripts/test-all.ts`.
 - Dataset/evaluator hardening: `backend/src/modules/ai/dataset/dataset-validator.ts`, `backend/src/modules/ai/evaluation/evaluator.ts`, `backend/src/modules/ai/evaluation/evaluator-tool-adapter.ts`.

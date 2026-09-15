@@ -17,6 +17,13 @@ import {
   isValidOrderConfirmationPhrase,
 } from './checkout-safety.js';
 import { INTERACTIVE_NOT_FOUND_REPLY } from './interactive-not-found.js';
+import {
+  detectSenderLanguage,
+  toStoredLanguage,
+  isResponseInSenderLanguage,
+  getLanguageSafeFallback,
+} from './sender-language.js';
+import { localizeSmartNluResult } from './response-localizer.js';
 
 export { AIContextState, ValidatedIntent, AIProcessResult };
 
@@ -120,7 +127,20 @@ export class AIService {
       (phone, msg, media, providerOptions) => this.processInternalLocal(phone, msg, media, providerOptions),
       options
     );
-    return route.result;
+
+    // Smart NLU has deterministic English templates, so localize them at the
+    // provider boundary. Gemini is instructed to compose in the sender's
+    // language; this guard only replaces an obviously mismatched answer with
+    // a safe, language-matched response.
+    if (route.provider === 'smart_nlu') return route.result;
+
+    const senderLanguage = detectSenderLanguage(messageText);
+    if (isResponseInSenderLanguage(senderLanguage, route.result.replyText)) return route.result;
+
+    return {
+      ...route.result,
+      replyText: getLanguageSafeFallback(senderLanguage),
+    };
   }
 
   /**
@@ -132,8 +152,20 @@ export class AIService {
     mediaType?: 'text' | 'image' | 'audio' | 'location',
     _options?: { conversationId?: number; requestId?: string }
   ): Promise<AIProcessResult> {
+    const senderLanguage = detectSenderLanguage(messageText);
+    const result = await this.processInternalLocalUnlocalized(whatsappNumber, messageText, mediaType, _options);
+    return localizeSmartNluResult(result, senderLanguage);
+  }
+
+  private async processInternalLocalUnlocalized(
+    whatsappNumber: string,
+    messageText: string,
+    mediaType?: 'text' | 'image' | 'audio' | 'location',
+    _options?: { conversationId?: number; requestId?: string }
+  ): Promise<AIProcessResult> {
     const customer = await customerService.findOrCreateByPhone(whatsappNumber);
     const state = await this.getState(customer.id);
+    state.preferredLanguage = toStoredLanguage(detectSenderLanguage(messageText));
     // This is the authoritative customer-turn boundary for Smart NLU. It is
     // persisted before any model/tool decision so merchant-switch isolation
     // cannot depend on test code manually changing a counter.
@@ -989,7 +1021,7 @@ Shall I add this to your cart?`,
         .map((o, idx) => `${idx + 1}. *${o.productName}* from **${o.merchantName}** — **$${o.basePrice.toFixed(2)}** (${o.merchantRating}⭐)`)
         .join('\n');
 
-      const header = maxItemPrice === 3.00 ? 'أطيب خيارات حلو تحت الـ $3:' : 'أطيب خيارات حلو وأسعارها مناسبة:';
+      const header = maxItemPrice === 3.00 ? 'Best dessert options under $3:' : 'Best dessert options with great prices:';
 
       return {
         intent: 'SEARCH_DESSERTS',
@@ -998,7 +1030,7 @@ Shall I add this to your cart?`,
 
 ${itemsText}
 
-أي خيار بتحب ضيف ع طلبك؟`,
+Which option would you like me to add?`,
       };
     }
 
@@ -1085,7 +1117,8 @@ You can ask me follow-up questions like *"which one is best rated?"* or simply t
     // 13. UNDERSTANDABILITY / UNKNOWN CATALOG REQUEST
     // -------------------------------------------------------------
     const isGreeting = /^(hi|hello|hey|salam|marhaba|مرحبا|سلام)\b/i.test(lower);
-    if (!isGreeting) {
+    const internationalGreeting = /^(bonjour|bonsoir|salut|hola|hallo|ciao|olá|oi|merhaba)\b/i.test(lower);
+    if (!isGreeting && !internationalGreeting) {
       return {
         intent: 'CLARIFICATION_REQUIRED',
         confidence: 0.80,

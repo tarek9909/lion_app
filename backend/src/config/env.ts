@@ -25,14 +25,15 @@ const envSchema = z.object({
   TRANSCRIPTION_PROVIDER: z.enum(['WHISPER', 'FIXTURE']).default('FIXTURE'),
   VISION_PROVIDER: z.enum(['VISION_API', 'FIXTURE']).default('FIXTURE'),
   OPENAI_API_KEY: z.string().default(''),
-  AI_PROVIDER: z.enum(['smart_nlu', 'gemini']).default('smart_nlu'),
+  AI_PROVIDER: z.enum(['smart_nlu', 'gemini']).default('gemini'),
   AI_ROUTING_MODE: z.enum(['STABLE_ONLY', 'SHADOW', 'CANARY', 'CANDIDATE_ONLY']).default('STABLE_ONLY'),
-  AI_STABLE_PROVIDER: z.enum(['smart_nlu', 'gemini']).default('smart_nlu'),
+  AI_STABLE_PROVIDER: z.enum(['smart_nlu', 'gemini']).default('gemini'),
   AI_CANDIDATE_PROVIDER: z.enum(['smart_nlu', 'gemini']).default('gemini'),
   AI_CANARY_PERCENTAGE: z.string().default('0').transform((val) => Math.max(0, Math.min(100, parseInt(val, 10) || 0))),
   AI_API_KEY: z.string().default(''),
   GEMINI_API_KEY: z.string().default(''),
   GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
+  GEMINI_MAX_OUTPUT_TOKENS: z.string().default('600').transform((val) => Math.max(256, Math.min(2000, parseInt(val, 10) || 600))),
   GEMINI_REQUEST_TIMEOUT_MS: z.string().default('120000').transform((val) => parseInt(val, 10)),
   WHATSAPP_WORKER_POLL_MS: z.string().default('750').transform((val) => parseInt(val, 10)),
   WHATSAPP_WORKER_MAX_RETRIES: z.string().default('3').transform((val) => parseInt(val, 10)),
@@ -82,6 +83,7 @@ export const config = {
     apiKey: env.AI_API_KEY,
     geminiApiKey: env.GEMINI_API_KEY,
     geminiModel: env.GEMINI_MODEL,
+    geminiMaxOutputTokens: env.GEMINI_MAX_OUTPUT_TOKENS,
     geminiRequestTimeoutMs: env.GEMINI_REQUEST_TIMEOUT_MS,
     routingMode: env.AI_ROUTING_MODE,
     stableProvider: env.AI_STABLE_PROVIDER,
@@ -130,14 +132,14 @@ export function resolveAIRoutingConfig(ai: any): ResolvedAIRoutingConfig {
 
   if (!explicitlyConfigured) {
     return {
-      stableProvider: provider || 'smart_nlu',
+      stableProvider: provider || 'gemini',
       candidateProvider: 'gemini',
       routingMode: 'STABLE_ONLY',
       canaryPercentage: 0,
     };
   }
 
-  const stableProvider = (ai?.stableProvider || provider || 'smart_nlu') as 'smart_nlu' | 'gemini';
+  const stableProvider = (ai?.stableProvider || provider || 'gemini') as 'smart_nlu' | 'gemini';
   if (provider && provider !== stableProvider) {
     throw new Error(
       `Startup Error: AI_PROVIDER=${provider} conflicts with AI_STABLE_PROVIDER=${stableProvider}. Set one provider graph explicitly.`
@@ -193,6 +195,10 @@ export function validateStartupConfig(overrideConfig?: any): { whatsappValid: bo
   const stableProvider = resolvedRouting.stableProvider;
   const candidateProvider = resolvedRouting.candidateProvider;
   const canaryPct = resolvedRouting.canaryPercentage;
+
+  if (targetConfig.nodeEnv === 'production' && (stableProvider !== 'gemini' || candidateProvider !== 'gemini')) {
+    throw new Error('Startup Error: production AI routing is Gemini-only. Set AI_STABLE_PROVIDER=gemini and AI_CANDIDATE_PROVIDER=gemini.');
+  }
 
   const isGeminiKeyValid = (key?: string): boolean =>
     Boolean(

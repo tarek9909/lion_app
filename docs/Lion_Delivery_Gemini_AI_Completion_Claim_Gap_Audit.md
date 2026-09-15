@@ -20,6 +20,9 @@ The honest remaining boundary is external verification: GAP-11 media/provider ev
 - [x] **No fabricated substitutions:** a catalog miss never invents a nearest product or silently changes the requested item.
 - [x] **Unclear message asks for clarification:** when a message is not understandable, incomplete, or contradictory, ask the customer to clarify with examples before any cart, address, or order mutation.
 - [x] **Conversation remains interactive:** both rules end with a customer-actionable question and are covered by `test-interactive-not-found.ts`.
+- [x] **Sender-language consistency:** detect the latest sender language on every turn and reply in that language and script; covered by `test-language-consistency.ts` for English, Arabic, Arabizi, mixed, French, and additional language/script profiles.
+- [x] **Gemini-only production path:** production defaults to Gemini, rejects Smart NLU routing at startup, and uses a bounded concise response budget.
+- [x] **Responsive customer path:** avoid eager cart reads for read-only tools and overlap independent post-turn persistence work.
 
 ## Area Status
 

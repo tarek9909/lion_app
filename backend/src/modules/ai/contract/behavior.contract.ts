@@ -158,6 +158,20 @@ export const SUPPORTED_LANGUAGES = [
   'ar_lb',    // Lebanese Arabic script
   'arabizi',  // Lebanese Arabizi (Latin script with numerals 2, 3, 7, etc.)
   'mixed',    // Code-switched / multilingual
+  'fr',        // French
+  'es',        // Spanish
+  'de',        // German
+  'it',        // Italian
+  'pt',        // Portuguese
+  'tr',        // Turkish
+  'ru',        // Russian / Cyrillic
+  'he',        // Hebrew
+  'hi',        // Hindi / Devanagari
+  'zh',        // Chinese
+  'ja',        // Japanese
+  'ko',        // Korean
+  'th',        // Thai
+  'other',     // Other language, preserved by the external provider
 ] as const;
 
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];

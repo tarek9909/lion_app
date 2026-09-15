@@ -284,9 +284,18 @@ export class AiToolsExecutor {
       };
     }
 
-    const cart = options?.shadowMode
-      ? (await cartService.getActiveCartReadOnly(customerId)) || ({ id: -1, customer_id: customerId, items: [], status: 'ACTIVE', subtotal: 0, estimated_delivery_fee: 1.5, estimated_total: 1.5 } as any)
-      : await cartService.getOrCreateActiveCart(customerId);
+    // Most tools are read-only and do not need a cart row. Defer this lookup
+    // until a cart mutation actually needs it; the old eager query added a DB
+    // round trip to every catalog search and address/help turn.
+    let cart: any | undefined;
+    const ensureCart = async () => {
+      if (!cart) {
+        cart = options?.shadowMode
+          ? (await cartService.getActiveCartReadOnly(customerId)) || ({ id: -1, customer_id: customerId, items: [], status: 'ACTIVE', subtotal: 0, estimated_delivery_fee: 1.5, estimated_total: 1.5 } as any)
+          : await cartService.getOrCreateActiveCart(customerId);
+      }
+      return cart;
+    };
 
     // 4. Dispatch tool
     switch (toolName as any) {
@@ -435,7 +444,7 @@ export class AiToolsExecutor {
 
         if (!options?.shadowMode) {
           await cartService.addItem(
-            cart.id,
+            currentCart?.id || (await ensureCart()).id,
             targetOption.merchantProductId,
             validatedArgs.quantity || 1,
             validatedArgs.customer_notes,
@@ -487,7 +496,8 @@ export class AiToolsExecutor {
           };
         }
 
-        const updated = await cartService.updateItemQuantity(cart.id, target, newQty);
+        const activeCart = await ensureCart();
+        const updated = await cartService.updateItemQuantity(activeCart.id, target, newQty);
         if (updated.ambiguous) {
           state.pendingClarification = {
             type: 'QUANTITY_TARGET',
@@ -549,7 +559,8 @@ export class AiToolsExecutor {
           };
         }
 
-        const updateRes = await cartService.updateItemVariant(cart.id, target, variant);
+        const activeCart = await ensureCart();
+        const updateRes = await cartService.updateItemVariant(activeCart.id, target, variant);
         if (updateRes.ambiguous) {
           state.pendingClarification = {
             type: 'VARIANT_OPTION',
@@ -603,7 +614,8 @@ export class AiToolsExecutor {
         const notes = validatedArgs.notes;
 
         if (!options?.shadowMode) {
-          const ok = await cartService.updateItemNotes(cart.id, target, notes);
+          const activeCart = await ensureCart();
+          const ok = await cartService.updateItemNotes(activeCart.id, target, notes);
           if (!ok) {
             return {
               toolName,
@@ -631,7 +643,8 @@ export class AiToolsExecutor {
         const target = validatedArgs.target_item;
 
         if (!options?.shadowMode) {
-          const ok = await cartService.removeItem(cart.id, target);
+          const activeCart = await ensureCart();
+          const ok = await cartService.removeItem(activeCart.id, target);
           if (!ok) {
             return {
               toolName,
@@ -694,7 +707,8 @@ export class AiToolsExecutor {
         }
 
         if (!options?.shadowMode) {
-          await cartService.clearCart(cart.id);
+          const activeCart = await ensureCart();
+          await cartService.clearCart(activeCart.id);
         }
         state.cartSummary = null;
         state.selectedMerchant = null;

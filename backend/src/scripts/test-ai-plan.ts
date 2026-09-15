@@ -18,6 +18,7 @@ const suites = [
   { name: 'Audit: Shadow zero-mutation boundary', script: 'src/scripts/test-shadow-immutability.ts' },
   { name: 'Audit: Evaluator safety and exact typing', script: 'src/scripts/test-evaluator-safety.ts' },
   { name: 'Audit: Interactive catalog misses and clarification', script: 'src/scripts/test-interactive-not-found.ts' },
+  { name: 'Audit: Sender-language response consistency', script: 'src/scripts/test-language-consistency.ts' },
 ];
 
 function runChild(script: string, env: NodeJS.ProcessEnv) {

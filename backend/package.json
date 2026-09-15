@@ -34,6 +34,7 @@
     "test:mgmt-ai": "tsx src/scripts/test-management-ai.ts",
     "test:routing": "tsx src/scripts/test-shadow-canary.ts",
     "test:not-found": "tsx src/scripts/test-interactive-not-found.ts",
+    "test:language": "tsx src/scripts/test-language-consistency.ts",
     "test:shadow-immutability": "tsx src/scripts/test-shadow-immutability.ts",
     "test:evaluator-safety": "tsx src/scripts/test-evaluator-safety.ts"
   },

@@ -1,5 +1,6 @@
 import { SearchResult } from '../catalog/catalog.service.js';
 import { ConversationStage } from './contract/behavior.contract.js';
+import { SupportedLanguage } from './contract/behavior.contract.js';
 
 export interface AIContextState {
   customerId: number;
@@ -22,6 +23,8 @@ export interface AIContextState {
   activeOrderSummary?: any;
   cartSummary?: any;
   selectedAddress?: any;
+  /** Language detected from the latest sender message. */
+  preferredLanguage?: SupportedLanguage;
 }
 
 export type ValidatedIntent =

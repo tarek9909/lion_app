@@ -613,7 +613,7 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
   const statusRes = await geminiService.processCustomerMessage(TEST_PHONE, 'wein el order');
   assert(
     statusRes.intent === 'ORDER_STATUS' &&
-      statusRes.replyText.includes('Order #') &&
+      statusRes.replyText.includes('#') &&
       statusRes.replyText.includes('Chicken House'),
     'Gemini retrieves live order tracking via get_order_status tool for "wein el order"'
   );
@@ -682,7 +682,7 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
   assert(
     basketRes.intent === 'BASKET_COMPARISON' &&
       basketRes.replyText.includes('Metro Supermarket') &&
-      basketRes.replyText.includes('Total Complete Basket'),
+      basketRes.replyText.includes('Majmou3 l basket kello'),
     'Gemini compares whole supermarket basket and ranks best-value store'
   );
 
