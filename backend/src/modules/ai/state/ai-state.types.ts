@@ -333,6 +333,8 @@ export async function saveConversationState(customerId: number, state: AIConvers
           targetConversationId,
           state.stage,
           JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
+          // Keep the relational projection lossless; state_json remains the
+          // canonical snapshot and can hold the full generated question.
           state.lastAssistantQuestion || null,
           JSON.stringify(payload),
           state.stateVersion,

@@ -825,7 +825,7 @@ CREATE TABLE conversation_state (
     active_cart_id BIGINT UNSIGNED NULL,
     active_search_session_id BIGINT UNSIGNED NULL,
     last_presented_options JSON NULL,
-    pending_question VARCHAR(120) NULL,
+    pending_question TEXT NULL,
     state_json JSON NULL,
     version_no INT UNSIGNED NOT NULL DEFAULT 1,
     updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),

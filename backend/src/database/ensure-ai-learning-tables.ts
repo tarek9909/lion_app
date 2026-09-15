@@ -29,6 +29,10 @@ export async function ensureAILearningTables(): Promise<void> {
       }
     }
 
+    // Gemini clarification questions can exceed the original 120-character
+    // projection. The full value is also retained in state_json.
+    await execute(`ALTER TABLE conversation_state MODIFY COLUMN pending_question TEXT NULL;`);
+
     // 2. Training curation queue (sanitized text ONLY, no raw PII)
     await execute(`
       CREATE TABLE IF NOT EXISTS training_curation_queue (
