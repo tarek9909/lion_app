@@ -1,6 +1,6 @@
 # Lion AI Error Prevention and Operations Runbook
 
-Status: implementation and operations runbook. Runtime safeguards described here are implemented in the current working tree; production deployment and live Meta/Gemini verification remain operator-controlled gates.
+Status: implementation and operations runbook. Runtime safeguards described here were deployed to the configured demo server at commit `000feec`; live Meta/Gemini conversation verification remains an operator-controlled gate.
 
 Date: 2026-09-16
 
@@ -62,7 +62,7 @@ The following safeguards are implemented and verified locally against disposable
 | Gemini-only production graph | Startup, persisted routing reconciliation, runtime routing, and reconfiguration reject Smart NLU in production. | `test:gemini`, `test:ai-architecture`; live production config still required |
 | Shadow safety | Shadow evaluation can receive a captured pre-turn state snapshot and remains mutation-disabled. | `test:shadow-immutability`, `test:ai-learning-e2e` |
 
-The local evidence is strong but not equivalent to a production proof. A release remains pending until the operator records the effective PM2 working directory/configuration and one redacted Meta inbound-to-outbound trace using a real Gemini credential. No credential, GitHub push, or server deployment was performed by this work.
+The local evidence is strong but not equivalent to a production proof. Commit `000feec` is deployed to the configured server, PM2 is online from `/var/www/lion/backend`, `/health` reports database and Redis `UP`, and the `pending_question`, `dedupe_key`, `context_json`, and unique outbox index migrations are present. The release remains pending until the operator records one redacted Meta inbound-to-outbound trace using a real Gemini credential. No credential was changed by this deployment.
 
 ## 3. Non-negotiable runtime invariants
 
@@ -369,13 +369,11 @@ Do not attach raw customer addresses, phone numbers, access tokens, app secrets,
 
 ## 13. Current conclusion for the supplied screenshot
 
-The server log shows healthy startup and Meta outbound acceptance, but it is not a correctness trace. The code-level safeguards and local regression/acceptance suites now pass, including the durable-learning E2E and architecture suites. Classify the implementation as “locally verified; production behavior pending” until the operator records:
+The server log shows healthy startup and Meta outbound acceptance, but it is not a correctness trace. The code-level safeguards and local regression/acceptance suites now pass, including the durable-learning E2E and architecture suites. Commit `000feec` is deployed and health-verified; classify live customer behavior as pending until the operator records:
 
-1. the deployed commit SHA and effective PM2 `cwd`;
-2. non-secret effective routing/configuration proving Gemini-only production mode;
-3. successful migration verification for `outbox_events.dedupe_key`;
-4. `/health`, queue-age, failed-job, and outbox counts;
-5. one redacted live Meta inbound-to-outbound trace; and
-6. the seven multilingual customer conversation replays.
+1. non-secret effective routing/configuration proving Gemini-only production mode;
+2. `/health`, queue-age, failed-job, and outbox counts;
+3. one redacted live Meta inbound-to-outbound trace; and
+4. the seven multilingual customer conversation replays.
 
 “Error-free” is not a defensible claim. The defensible target is zero unsafe mutations, zero duplicate orders/replies, grounded facts, same-language responses, and a bounded, auditable recovery path for every transient failure.
