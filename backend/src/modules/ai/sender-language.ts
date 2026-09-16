@@ -134,7 +134,7 @@ function profileScore(text: string, profile: LanguageProfile): number {
 
 function arabiziScore(text: string): number {
   const normalized = normalize(text);
-  const strongWords = /\b(?:bade|baddi|badde|baddak|baddik|zidli|sawiya|sawiyon|kifak|kifik|shou|shu|chou|wein|wen|3al|3albet|3andon|3andak|3ndak|3ndk|3tene|kaza|fadde|fade|ma7eyun|ma7eon|kullun|kullon|akid|akeed|ta2kid|ya3tik|ma2liyeh|mosa3adeh|a7san|arkhas|kabbis|mar7aba|tfaddal|bse3dak)\b/g;
+  const strongWords = /\b(?:bade|baddi|badde|baddak|baddik|zidli|sawiya|sawiyon|kifak|kifik|shou|shu|chou|wein|wen|3al|3albet|3andon|3andak|3ndak|3ndk|3tene|kaza|fadde|fade|ma7eyun|ma7eon|kullun|kullon|akid|akeed|ta2kid|ya3tik|ma2liyeh|mosa3adeh|a7san|arkhas|kabbis|mar7aba|tfaddal|bse3dak|wrjene|warjine|farjine|fiyi|fina|mbala|ehh?|tamam|shukran|3enna|mat3am|ma7al)\b/g;
   const encodedWords = /\b[a-z]*[2356789][a-z]+\b/g;
   const strongMatches = normalized.match(strongWords)?.length || 0;
   const encodedMatches = normalized.match(encodedWords)?.length || 0;

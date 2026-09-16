@@ -173,6 +173,28 @@ export class ContextCompilerService {
       limit: 3,
     });
 
+    // 7. Active Saida Partners & Directory
+    let directoryBlock = '';
+    try {
+      const merchants = await query<any[]>(
+        `SELECT m.id, m.name, m.merchant_type, mb.address_line, mb.estimated_prep_time_minutes,
+                COALESCE(dz.base_delivery_fee, 1.50) as delivery_fee,
+                GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ', ') as categories
+         FROM merchants m
+         JOIN merchant_branches mb ON mb.merchant_id = m.id AND mb.status = 'ACTIVE'
+         LEFT JOIN delivery_zones dz ON dz.id = mb.delivery_zone_id
+         LEFT JOIN categories c ON c.merchant_id = m.id
+         WHERE m.status = 'ACTIVE'
+         GROUP BY m.id, mb.id, mb.address_line, mb.estimated_prep_time_minutes, dz.base_delivery_fee
+         ORDER BY m.name ASC`
+      );
+      if (merchants && merchants.length > 0) {
+        directoryBlock = 'Available Saida Partners & Options:\n' + merchants.map((m: any) =>
+          `- ${m.name} (${m.merchant_type}): ${m.categories || 'Food & beverages'} (Delivery: $${Number(m.delivery_fee).toFixed(2)} | ~${m.estimated_prep_time_minutes || 20} mins)`
+        ).join('\n');
+      }
+    } catch {}
+
     return {
       conversation: {
         id: conversationId,
@@ -210,7 +232,8 @@ export class ContextCompilerService {
         activeTask ? `Active Task: ${activeTask.taskType} (expected: ${activeTask.expectedEntityType || 'none'})` : null,
         taskStack.some((t) => t.status === 'PAUSED') ? `Suspended Tasks: ${taskStack.filter((t) => t.status === 'PAUSED').map((t) => t.taskType).join(', ')}` : null,
         summary?.customerGoal ? `Conversation Summary: ${summary.customerGoal}` : null,
-      ].filter(Boolean).join('\n'),
+        directoryBlock || null,
+      ].filter(Boolean).join('\n\n'),
       versions: {
         promptVersion,
         toolSchemaVersion,
@@ -228,7 +251,7 @@ export class ContextCompilerService {
     if (!conversationId) return [];
     try {
       const rows = await query<any[]>(
-        `SELECT sender_type, message_text, created_at
+        `SELECT sender_type, text_body, created_at
          FROM messages
          WHERE conversation_id = ?
          ORDER BY id DESC LIMIT ?`,
@@ -239,7 +262,7 @@ export class ContextCompilerService {
         .reverse()
         .map((r) => ({
           role: r.sender_type === 'CUSTOMER' ? 'user' : 'assistant',
-          text: r.message_text || '',
+          text: r.text_body || '',
         }));
     } catch {
       return [];

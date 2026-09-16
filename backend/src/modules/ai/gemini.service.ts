@@ -881,7 +881,7 @@ export class GeminiService {
       break;
     }
 
-    if (customerError) {
+    if (customerError && !finalText) {
       finalText = dispatchCustomerError({ ...customerError, language: responseLanguage, facts: this.errorFacts(customerError.result) })?.text || getLanguageSafeFallback(responseLanguage);
     } else if (!finalText) {
       finalText = getLanguageSafeFallback(responseLanguage);
