@@ -59,7 +59,7 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
 
   list_category_options: {
     name: 'list_category_options',
-    description: 'Show verified options in a category from the current cart merchant or another explicitly selected merchant context. Use this for natural requests such as adding a drink, dessert, or side.',
+    description: 'Show verified options in a category from the current cart merchant, a named merchant already present in this conversation, or a merchant in the pending multi-order plan. Use this for natural requests such as adding a drink, dessert, or side.',
     parameters: {
       category: {
         type: 'STRING',
@@ -70,7 +70,55 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
       },
       scope: {
         type: 'STRING',
-        description: 'Use current_cart_merchant when modifying an existing cart. The server resolves the merchant from verified state.',
+        description: 'Use current_cart_merchant for the current cart or selected_merchant for a previously selected merchant. A named merchant_reference or batch_child_index takes precedence.',
+        required: false,
+        enum: ['current_cart_merchant', 'selected_merchant'],
+      },
+      merchant_reference: {
+        type: 'STRING',
+        description: 'A merchant name the customer just mentioned, such as Metro Supermarket. The server may resolve it only from verified current conversation context.',
+        required: false,
+        min: 1,
+        max: 120,
+      },
+      batch_child_index: {
+        type: 'INTEGER',
+        description: 'One-based merchant number from the pending multi-order summary.',
+        required: false,
+        min: 1,
+        max: 20,
+      },
+    },
+  },
+
+  list_merchant_menu: {
+    name: 'list_merchant_menu',
+    description: 'Show the verified menu of the current, named, or pending-batch merchant. Optionally restrict it to a category such as beverage or dessert. Never claim a product without this tool.',
+    parameters: {
+      merchant_reference: {
+        type: 'STRING',
+        description: 'A merchant name the customer mentioned, such as Metro Supermarket. The server resolves it only from verified current conversation context.',
+        required: false,
+        min: 1,
+        max: 120,
+      },
+      batch_child_index: {
+        type: 'INTEGER',
+        description: 'One-based merchant number from the pending multi-order summary.',
+        required: false,
+        min: 1,
+        max: 20,
+      },
+      category: {
+        type: 'STRING',
+        description: 'Optional category such as beverage, dessert, or side.',
+        required: false,
+        min: 1,
+        max: 80,
+      },
+      scope: {
+        type: 'STRING',
+        description: 'Use current_cart_merchant or selected_merchant when no named merchant is supplied.',
         required: false,
         enum: ['current_cart_merchant', 'selected_merchant'],
       },
@@ -751,6 +799,7 @@ export function buildGeminiDeclaration(spec: ToolDefinitionSpec): any {
 // Concrete generated Zod schemas
 export const SearchCatalogSchema = buildZodSchema(CANONICAL_TOOL_SPECS.search_catalog);
 export const ListCategoryOptionsSchema = buildZodSchema(CANONICAL_TOOL_SPECS.list_category_options);
+export const ListMerchantMenuSchema = buildZodSchema(CANONICAL_TOOL_SPECS.list_merchant_menu);
 export const ResolveProductNameSchema = buildZodSchema(CANONICAL_TOOL_SPECS.resolve_product_name);
 export const CompareSupermarketBasketSchema = buildZodSchema(CANONICAL_TOOL_SPECS.compare_supermarket_basket);
 export const GetActiveCartSchema = buildZodSchema(CANONICAL_TOOL_SPECS.get_active_cart);
@@ -778,6 +827,7 @@ export const SwitchMerchantRejectSchema = buildZodSchema(CANONICAL_TOOL_SPECS.sw
 export const ToolArgumentSchemas = {
   search_catalog: SearchCatalogSchema,
   list_category_options: ListCategoryOptionsSchema,
+  list_merchant_menu: ListMerchantMenuSchema,
   resolve_product_name: ResolveProductNameSchema,
   compare_supermarket_basket: CompareSupermarketBasketSchema,
   get_active_cart: GetActiveCartSchema,

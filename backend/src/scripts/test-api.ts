@@ -94,12 +94,24 @@ export async function runApiTests(): Promise<boolean> {
     const unauthAnalytics = await fetch(`${baseUrl}/api/analytics/overview`);
     const unauthRelay = await fetch(`${baseUrl}/api/relay/1/messages`);
     const unauthDrivers = await fetch(`${baseUrl}/api/drivers`);
+    const unauthWhatsAppSettings = await fetch(`${baseUrl}/api/settings/whatsapp`);
     assert(
       unauthOrders.status === 401 &&
       unauthAnalytics.status === 401 &&
       unauthRelay.status === 401 &&
-      unauthDrivers.status === 401,
+      unauthDrivers.status === 401 &&
+      unauthWhatsAppSettings.status === 401,
       'Operational APIs reject unauthenticated access with 401 Unauthorized (G-051)'
+    );
+
+    const whatsappSettingsRes = await fetch(`${baseUrl}/api/settings/whatsapp`, { headers: authHeaders });
+    const whatsappSettingsData: any = await whatsappSettingsRes.json();
+    assert(
+      whatsappSettingsRes.status === 200 &&
+      typeof whatsappSettingsData.data?.configured === 'boolean' &&
+      !Object.prototype.hasOwnProperty.call(whatsappSettingsData.data || {}, 'accessToken'),
+      'GET /api/settings/whatsapp returns SUPERADMIN credential status without exposing the token',
+      whatsappSettingsData
     );
 
     // 7. Internal People Directory and Live WhatsApp Inbox

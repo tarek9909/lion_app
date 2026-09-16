@@ -13,6 +13,7 @@ import {
   X,
   Radio,
   Brain,
+  KeyRound,
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -70,6 +71,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'orders', label: 'Live Orders', icon: LayoutDashboard },
         { id: 'relay', label: 'Masked Relay', icon: ShieldCheck, badge: 'Privacy', badgeVariant: 'emerald' },
         { id: 'inbox', label: 'WhatsApp Inbox', icon: MessageSquare, badge: 'Live', badgeVariant: 'cyan' },
+        { id: 'whatsapp-settings', label: 'WhatsApp Settings', icon: KeyRound, badge: 'Admin', badgeVariant: 'gold' },
       ],
     },
     {

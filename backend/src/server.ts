@@ -1,6 +1,6 @@
 import http from 'http';
 import { app } from './app.js';
-import { config, validateStartupConfig } from './config/env.js';
+import { config, validateStartupConfig, validateWhatsAppRuntimeCredential } from './config/env.js';
 import { testDbConnection } from './database/db.js';
 import { ensureAILearningTables } from './database/ensure-ai-learning-tables.js';
 import { shadowCanaryRouter } from './modules/ai/routing/shadow-canary.service.js';
@@ -8,6 +8,7 @@ import { initWebSocketServer } from './services/websocket.js';
 import { cartService } from './modules/carts/cart.service.js';
 import { whatsappWorker } from './modules/conversations/whatsapp.worker.js';
 import { harvestingWorker } from './modules/ai/dataset/harvesting-worker.js';
+import { whatsappCredentialService } from './modules/whatsapp/whatsapp-credential.service.js';
 
 const server = http.createServer(app);
 
@@ -16,7 +17,7 @@ initWebSocketServer(server);
 
 async function startServer() {
   // 1. Validate startup configuration fail-fast (G-061)
-  validateStartupConfig();
+  validateStartupConfig(undefined, { deferWhatsAppCredential: true });
 
   // 2. Verify database connectivity
   const dbOk = await testDbConnection();
@@ -26,6 +27,8 @@ async function startServer() {
   }
   console.log(`✅ Connected to MySQL database "${config.db.database}" on ${config.db.host}:${config.db.port}`);
   await ensureAILearningTables();
+  await whatsappCredentialService.warm();
+  validateWhatsAppRuntimeCredential(await whatsappCredentialService.getAccessToken());
   await shadowCanaryRouter.reconcileFromDatabase();
   cartService.startAbandonmentScheduler();
   whatsappWorker.start();

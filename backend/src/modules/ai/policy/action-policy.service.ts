@@ -1,6 +1,14 @@
 import { StructuredDecision } from '../planning/decision.schema.js';
 import { AIConversationState } from '../state/ai-state.types.js';
 
+/** Shared interpretation of a batch selection from the customer’s exact turn. */
+export function inferBatchSelection(value: unknown): '1' | '2' | 'both' | null {
+  const phrase = String(value || '').trim().toLocaleLowerCase();
+  if (/(?:\bboth\b|\bltnen\b|\bel tnayn\b|ÙƒÙ„Ù‡Ù…Ø§|Ø§Ù„Ø§Ø«Ù†ÙŠÙ†)/iu.test(phrase)) return 'both';
+  const child = phrase.match(/(?:\bconfirm\b\s*)?([12])\b/iu)?.[1];
+  return child === '1' || child === '2' ? child : null;
+}
+
 export interface PolicyGateResult {
   allowed: boolean;
   violationCode?: string;
@@ -88,7 +96,7 @@ export class ActionPolicyService {
 
     // 3. BATCH ORDER CONFIRMATION
     if (toolName === 'confirm_order_batch') {
-      const selection = String(args.selection || '').toLowerCase();
+      const selection = String(args.selection || inferBatchSelection(args.confirmation_phrase) || '').toLowerCase();
       if (!['1', '2', 'both'].includes(selection)) {
         return {
           allowed: false,

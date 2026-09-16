@@ -133,6 +133,12 @@ export interface DashboardContacts {
   customers: Array<{ id: number; public_id: string; display_name: string | null; whatsapp_number: string; status: string; created_at: string; last_order_at: string | null; total_completed_orders: number; lifetime_spend: number }>;
 }
 
+export interface WhatsAppCredentialStatus {
+  configured: boolean;
+  source: 'dashboard' | 'environment' | 'none';
+  updatedAt: string | null;
+}
+
 // Token management & authenticated fetch helper (G-051)
 let cachedToken: string | null = typeof window !== 'undefined' ? localStorage.getItem('lion_auth_token') : null;
 
@@ -304,6 +310,24 @@ export const api = {
     });
     const data = await res.json();
     if (!res.ok || data.success === false) throw new Error(data.error?.message || 'WhatsApp reply failed');
+    return data.data;
+  },
+
+  // WhatsApp integration credential. The API only returns metadata, never the token itself.
+  async getWhatsAppCredentialStatus(): Promise<WhatsAppCredentialStatus> {
+    const res = await authFetch(`${API_BASE}/settings/whatsapp`);
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Failed to load WhatsApp credential status');
+    return data.data;
+  },
+
+  async saveWhatsAppAccessToken(accessToken: string): Promise<WhatsAppCredentialStatus> {
+    const res = await authFetch(`${API_BASE}/settings/whatsapp/access-token`, {
+      method: 'PUT',
+      body: JSON.stringify({ accessToken }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Failed to save WhatsApp access token');
     return data.data;
   },
 

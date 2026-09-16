@@ -1,6 +1,6 @@
 import assert from 'assert';
 import { shadowCanaryRouter, RoutingMode } from '../modules/ai/routing/shadow-canary.service.js';
-import { validateStartupConfig } from '../config/env.js';
+import { validateStartupConfig, validateWhatsAppRuntimeCredential } from '../config/env.js';
 import { config } from '../config/env.js';
 
 export async function runConfigMatrixTests() {
@@ -14,6 +14,18 @@ export async function runConfigMatrixTests() {
     // Test 1: Startup Credential Validation Matrix
     // -------------------------------------------------------------
     console.log('  Testing startup credential validation matrix...');
+
+    assert.doesNotThrow(() => {
+      validateWhatsAppRuntimeCredential('dashboard-managed-access-token', {
+        whatsapp: { mode: 'LIVE', phoneNumberId: '1234567890' },
+      });
+    }, 'LIVE WhatsApp accepts a valid dashboard-managed token');
+    assert.throws(() => {
+      validateWhatsAppRuntimeCredential('placeholder', {
+        whatsapp: { mode: 'LIVE', phoneNumberId: '1234567890' },
+      });
+    }, /no valid WhatsApp access token/, 'LIVE WhatsApp rejects a missing or placeholder dashboard token');
+    console.log('  ✅ Live WhatsApp runtime credential validation supports dashboard-managed tokens [PASS]');
 
     // 1a: STABLE_ONLY with smart_nlu requires NO Gemini key
     assert.doesNotThrow(() => {

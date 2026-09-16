@@ -379,10 +379,22 @@ export class CatalogService {
     merchantBranchId: number | null,
     category: string | null,
   ): Promise<SearchResult[]> {
-    if (!merchantBranchId || !category) return [];
-    const categoryQuery = category.toLocaleLowerCase().includes('drink') || category.toLocaleLowerCase().includes('beverage')
+    return this.listVerifiedMerchantMenu(merchantBranchId, { category, limit: 5 });
+  }
+
+  /** Return a verified merchant menu, optionally restricted to a category. */
+  async listVerifiedMerchantMenu(
+    merchantBranchId: number | null,
+    options?: { category?: string | null; limit?: number },
+  ): Promise<SearchResult[]> {
+    if (!merchantBranchId) return [];
+    const category = options?.category?.trim() || null;
+    const categoryQuery = category && (category.toLocaleLowerCase().includes('drink') || category.toLocaleLowerCase().includes('beverage'))
       ? ['beverages', 'drinks']
-      : [category.toLocaleLowerCase()];
+      : category ? [category.toLocaleLowerCase()] : [];
+    const categoryFilter = categoryQuery.length > 0
+      ? `AND LOWER(c.slug) IN (${categoryQuery.map(() => '?').join(', ')})`
+      : '';
     const rows = await query<any[]>(`
       SELECT
         mp.id AS merchantProductId,
@@ -408,10 +420,10 @@ export class CatalogService {
         AND mp.status = 'ACTIVE' AND mp.is_available = 1
         AND m.status = 'ACTIVE' AND m.accepts_orders = 1
         AND mb.status = 'ACTIVE' AND mb.accepts_orders = 1
-        AND LOWER(c.slug) IN (${categoryQuery.map(() => '?').join(', ')})
+        ${categoryFilter}
       ORDER BY mp.base_price ASC, mp.id ASC
-      LIMIT 5
-    `, [merchantBranchId, ...categoryQuery]);
+      LIMIT ?
+    `, [merchantBranchId, ...categoryQuery, Math.min(Math.max(options?.limit || 20, 1), 20)]);
     return rows.map((row) => ({
       merchantProductId: Number(row.merchantProductId),
       productId: Number(row.productId),

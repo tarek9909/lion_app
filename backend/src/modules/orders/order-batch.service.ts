@@ -6,6 +6,8 @@ import { orderService } from './order.service.js';
 export interface BatchChildSummary {
   id: number;
   index: number;
+  merchantId: number;
+  merchantBranchId: number;
   merchantName: string;
   cartId: number;
   addressId: number | null;
@@ -129,7 +131,7 @@ export class OrderBatchService {
       status: String(rows[0].status),
       paymentPolicy: 'SEPARATE_CASH',
       children: children.map((child, index) => ({
-        id: Number(child.id), index: index + 1, merchantName: String(child.merchant_name), cartId: Number(child.cart_id),
+        id: Number(child.id), index: index + 1, merchantId: Number(child.merchant_id), merchantBranchId: Number(child.merchant_branch_id), merchantName: String(child.merchant_name), cartId: Number(child.cart_id),
         addressId: child.customer_address_id ? Number(child.customer_address_id) : null, status: String(child.status),
         confirmationStatus: String(child.confirmation_status), subtotal: Number(child.quoted_subtotal),
         deliveryFee: Number(child.quoted_delivery_fee), total: Number(child.quoted_total), orderId: child.order_id ? Number(child.order_id) : null,

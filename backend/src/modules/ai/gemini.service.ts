@@ -869,7 +869,7 @@ export class GeminiService {
           // The customer’s explicit confirmation is the authorization, not a
           // model-invented argument. Preserve the raw turn for the policy
           // decision just as the executor does before its own validation.
-          const policyToolArgs = toolName === 'confirm_and_create_order' && !toolArgs.confirmation_phrase
+          const policyToolArgs = (toolName === 'confirm_and_create_order' || toolName === 'confirm_order_batch') && !toolArgs.confirmation_phrase
             ? { ...toolArgs, confirmation_phrase: text }
             : toolArgs;
           const decisionValidation = validateStructuredDecision({

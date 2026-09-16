@@ -159,21 +159,43 @@ export function resolveAIRoutingConfig(ai: any): ResolvedAIRoutingConfig {
 /**
  * Validate external service credentials at startup (G-053, G-054, G-061, G-062)
  */
-export function validateStartupConfig(overrideConfig?: any): { whatsappValid: boolean; mediaValid: boolean; aiValid: boolean } {
+export interface StartupValidationOptions {
+  /**
+   * Lets the process connect to the database before validating the WhatsApp
+   * token. This is needed when the active token is stored encrypted in the
+   * dashboard settings instead of in the environment.
+   */
+  deferWhatsAppCredential?: boolean;
+}
+
+export function validateWhatsAppRuntimeCredential(accessToken: string | undefined, targetConfig: any = config): boolean {
+  if (targetConfig.whatsapp.mode !== 'LIVE') return true;
+
+  const token = accessToken || '';
+  const phoneId = targetConfig.whatsapp.phoneNumberId;
+  const hasToken = Boolean(token) && !token.startsWith('demo_') && token !== 'placeholder' && token !== 'your_meta_access_token_here' && token !== 'demo_whatsapp_access_token_placeholder';
+  const hasPhoneId = Boolean(phoneId) && !phoneId.startsWith('demo_') && phoneId !== 'placeholder' && phoneId !== 'your_meta_phone_number_id_here' && phoneId !== 'demo_phone_number_id_placeholder';
+  if (!hasToken || !hasPhoneId) {
+    throw new Error(
+      'Startup Error: WHATSAPP_MODE is set to LIVE but no valid WhatsApp access token or phone number ID is configured.'
+    );
+  }
+
+  return true;
+}
+
+export function validateStartupConfig(
+  overrideConfig?: any,
+  options: StartupValidationOptions = {},
+): { whatsappValid: boolean; mediaValid: boolean; aiValid: boolean } {
   const targetConfig = overrideConfig || config;
   let whatsappValid = true;
   let mediaValid = true;
   let aiValid = true;
 
   if (targetConfig.whatsapp.mode === 'LIVE') {
-    const token = targetConfig.whatsapp.accessToken;
-    const phoneId = targetConfig.whatsapp.phoneNumberId;
-    const hasToken = Boolean(token) && !token.startsWith('demo_') && token !== 'placeholder' && token !== 'your_meta_access_token_here' && token !== 'demo_whatsapp_access_token_placeholder';
-    const hasPhoneId = Boolean(phoneId) && !phoneId.startsWith('demo_') && phoneId !== 'placeholder' && phoneId !== 'your_meta_phone_number_id_here' && phoneId !== 'demo_phone_number_id_placeholder';
-    if (!hasToken || !hasPhoneId) {
-      throw new Error(
-        'Startup Error: WHATSAPP_MODE is set to LIVE but WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID is missing or placeholder.'
-      );
+    if (!options.deferWhatsAppCredential) {
+      validateWhatsAppRuntimeCredential(targetConfig.whatsapp.accessToken, targetConfig);
     }
   } else {
     console.log('[Startup Config] WhatsApp Mode: MOCK (Local simulator active)');

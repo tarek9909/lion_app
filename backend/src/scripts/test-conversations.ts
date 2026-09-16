@@ -4,7 +4,7 @@ import { aiToolsExecutor } from '../modules/ai/tools/ai-tools.executor.js';
 import { customerService } from '../modules/customers/customer.service.js';
 import { cartService } from '../modules/carts/cart.service.js';
 import { orderService } from '../modules/orders/order.service.js';
-import { createInitialState, saveConversationState } from '../modules/ai/state/ai-state.types.js';
+import { createInitialState, loadConversationState, saveConversationState } from '../modules/ai/state/ai-state.types.js';
 import { persistInboundMessage } from '../modules/conversations/conversation.persistence.js';
 import { query } from '../database/db.js';
 import { config } from '../config/env.js';
@@ -37,10 +37,15 @@ export async function runConversationTestPack(): Promise<boolean> {
     const lastContent = payload.contents?.[payload.contents.length - 1];
     const functionResponse = lastContent?.parts?.find((part: any) => part.functionResponse)?.functionResponse;
     if (functionResponse) {
+      if (functionResponse.name === 'list_category_options' && functionResponse.response?.merchant_name === 'Metro Supermarket') {
+        return new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'Mawjoud 3end Metro Supermarket hal mashroubet. Ayya wahde bte7eb tzid 3a talab Metro?' }] } }] }), { status: 200 });
+      }
       const textByTool: Record<string, string> = {
         rename_delivery_address: 'Tamam, sammayt l 3enwen Home. Rodd confirm iza badak t2akked l talab.',
         list_category_options: 'Mawjoud 3end Chicken House hal mashroubet:\n- Regular Coca-Cola: $1.50\n- Coke Zero: $1.50\n\nAyya wahad bte7eb tzid 3al cart?',
+        list_merchant_menu: 'Hayde lmenu l mawjoude 3end Metro Supermarket. Ayya shi bte7eb tzid 3al talab?',
         create_multi_order_plan: 'Fini e3mel talabayn mfassalin. Baddak yrou7o la nafs l 3enwen? Ba3d l molakhas l nehe2e, rodd confirm both.',
+        confirm_order_batch: 'Tamam, 2akkadt l talabayn l mfassalin.',
       };
       return new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: textByTool[functionResponse.name] || 'Tamam.' }] } }] }), { status: 200 });
     }
@@ -52,8 +57,14 @@ export async function runConversationTestPack(): Promise<boolean> {
       ? { name: 'rename_delivery_address', args: { address_label: 'Home' } }
       : userText.includes('Bde eshrab')
         ? { name: 'list_category_options', args: { category: 'beverage', scope: 'current_cart_merchant' } }
+        : userText.includes('metro drinks')
+          ? { name: 'list_category_options', args: { category: 'beverage', merchant_reference: 'Metro Supermarket' } }
+          : userText.includes('lmenu ta3eet metro')
+            ? { name: 'list_merchant_menu', args: { merchant_reference: 'Metro Supermarket' } }
         : userText.includes('Fene etlub ltnen')
           ? { name: 'create_multi_order_plan', args: { selection_source: 'last_presented_options', selected_option_indexes: [1, 2] } }
+          : userText.includes('Confirm both')
+            ? { name: 'confirm_order_batch', args: { confirmation_phrase: 'Confirm both' } }
           : null;
     return new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: functionCall ? [{ functionCall }] : [{ text: 'I did not understand that. Please tell me what you would like to order.' }] } }] }), { status: 200 });
   });
@@ -123,6 +134,8 @@ export async function runConversationTestPack(): Promise<boolean> {
 
     await cartService.addItem(contextCart.id, Number(products[0].id), 1);
     const burgerRows = await query<any[]>(`SELECT mp.id, mb.merchant_id FROM merchant_products mp JOIN merchant_branches mb ON mb.id=mp.merchant_branch_id JOIN merchants m ON m.id=mb.merchant_id WHERE m.name = 'Burger Spot' LIMIT 1`);
+    const metroRows = await query<any[]>(`SELECT mp.id, mb.merchant_id FROM merchant_products mp JOIN merchant_branches mb ON mb.id=mp.merchant_branch_id JOIN merchants m ON m.id=mb.merchant_id WHERE m.name = 'Metro Supermarket' LIMIT 1`);
+    const sweetsRows = await query<any[]>(`SELECT mp.id, mb.merchant_id FROM merchant_products mp JOIN merchant_branches mb ON mb.id=mp.merchant_branch_id JOIN merchants m ON m.id=mb.merchant_id WHERE m.name = 'Beirut Sweets & Cafe' LIMIT 1`);
 
     const drinkPhone = '96170999113';
     const drinkInbound = await persistInboundMessage(drinkPhone, 'Bde eshrab she m3a', { providerMessageId: `drink-${Date.now()}` });
@@ -143,8 +156,8 @@ export async function runConversationTestPack(): Promise<boolean> {
     const bothCustomer = await customerService.findByPhone(bothPhone);
     const bothState = createInitialState(bothCustomer!.id, 'arabizi', bothInbound.conversationId);
     bothState.lastPresentedOptions = [
-      { merchantProductId: Number(products[0].id), merchantId: Number(products[0].merchant_id) },
-      { merchantProductId: Number(burgerRows[0].id), merchantId: Number(burgerRows[0].merchant_id) },
+      { merchantProductId: Number(metroRows[0].id), merchantId: Number(metroRows[0].merchant_id) },
+      { merchantProductId: Number(sweetsRows[0].id), merchantId: Number(sweetsRows[0].merchant_id) },
     ] as any;
     await saveConversationState(bothCustomer!.id, bothState, bothInbound.conversationId);
     const bothReply = await aiService.processCustomerMessage(bothPhone, 'Fene etlub ltnen?', 'text', { conversationId: bothInbound.conversationId });
@@ -153,13 +166,30 @@ export async function runConversationTestPack(): Promise<boolean> {
       bothReply.responseCategory === 'MULTI_ORDER_PLAN' && /talabayn mfassalin/i.test(bothReply.replyText) && bothBatches.length === 1,
       'explicit Arabizi request to order both presented merchants creates a safe order batch instead of failing',
     );
+    const metroDrinksReply = await aiService.processCustomerMessage(bothPhone, 'Tayyeb b3tle shu 3ndu metro drinks', 'text', { conversationId: bothInbound.conversationId });
+    const metroMenuReply = await aiService.processCustomerMessage(bothPhone, 'B3tle lmenu ta3eet metro', 'text', { conversationId: bothInbound.conversationId });
+    const batchContextState = await loadConversationState(bothCustomer!.id, bothInbound.conversationId);
+    const addMetroDrink = await aiToolsExecutor.executeTool('add_to_cart', { option_index: 1, quantity: 1 }, bothCustomer!.id, batchContextState, 0, undefined, 'add the first Metro drink');
+    assert(
+      /Metro Supermarket/i.test(metroDrinksReply.replyText) && /Metro Supermarket/i.test(metroMenuReply.replyText) &&
+      batchContextState.stage === 'MULTI_ORDER_REVIEW' && addMetroDrink.success && addMetroDrink.result.action === 'ADDED_TO_ORDER_BATCH',
+      'named merchant category and menu requests resolve safely inside a pending multi-order plan and add to the correct child cart',
+    );
 
     const batchState = createInitialState(customer!.id, 'en', first.conversationId);
     const batchPlan = await aiToolsExecutor.executeTool('create_multi_order_plan', { items: [{ merchant_product_id: Number(burgerRows[0].id), quantity: 1 }] }, customer!.id, batchState, 0, undefined, 'order from both places');
     assert(batchPlan.success && batchPlan.result.children.length === 2, 'two merchants create two independent reviewable batch children');
     const addressSet = await aiToolsExecutor.executeTool('set_batch_delivery_address', { address_label: 'Home' }, customer!.id, batchState, 0, undefined, 'same address');
-    const batchConfirm = await aiToolsExecutor.executeTool('confirm_order_batch', { confirmation_phrase: 'confirm both', selection: 'both' }, customer!.id, batchState, 0, undefined, 'confirm both');
-    assert(addressSet.success && batchConfirm.success && batchConfirm.result.children.every((child: any) => child.status === 'PLACED'), 'batch requires address and explicit confirm both before placing separate orders');
+    await saveConversationState(customer!.id, batchState, first.conversationId);
+    const batchConfirm = await aiService.processCustomerMessage(PHONE, 'Confirm both', 'text', { conversationId: first.conversationId });
+    const confirmedBatchState = await loadConversationState(customer!.id, first.conversationId);
+    const confirmedBatch = await aiToolsExecutor.executeTool('review_multi_order_plan', {}, customer!.id, confirmedBatchState, 0);
+    const postOrderMenu = await aiToolsExecutor.executeTool('list_merchant_menu', { merchant_reference: 'Chicken House' }, customer!.id, confirmedBatchState, 0);
+    assert(
+      addressSet.success && batchConfirm.responseCategory === 'NORMAL' && confirmedBatch.success && confirmedBatch.result.children.every((child: any) => child.status === 'PLACED') &&
+      postOrderMenu.success && confirmedBatchState.stage === 'SELECTING_OPTION',
+      'batch confirmation infers both from the exact customer text and post-order browsing uses a legal state transition',
+    );
 
     const arabiziPickup = (orderService as any).orderStatusNotification('PICKED_UP', {
       order_number: 'ORD-TEST-1', merchant_name: 'Chicken House', driver_name: 'Ahmad', driver_code: 'D-101', address_label: 'Home',

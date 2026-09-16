@@ -19,6 +19,7 @@ import {
   isHistoricalOrQuestionConfirmation,
   isNegatedConfirmation,
 } from '../checkout-safety.js';
+import { inferBatchSelection } from '../policy/action-policy.service.js';
 
 export interface ToolExecutionResult {
   toolName: string;
@@ -216,6 +217,80 @@ export class AiToolsExecutor {
   }
 
   /**
+   * Resolve a merchant mentioned by the customer only from trusted state: the
+   * active cart, selected merchant, or a child of the pending batch. Free-form
+   * text is never treated as a database lookup key.
+   */
+  private async resolveMerchantContext(
+    customerId: number,
+    state: AIConversationState,
+    args: { merchant_reference?: string; batch_child_index?: number; scope?: string },
+  ): Promise<{ merchantId: number; branchId: number; name: string; batchChildCartId?: number } | null> {
+    const activeCart = await cartService.getActiveCartReadOnly(customerId);
+    const candidates: { merchantId: number; branchId: number; name: string; batchChildCartId?: number }[] = [];
+    if (activeCart?.merchant_branch_id) {
+      candidates.push({
+        merchantId: 0,
+        branchId: Number(activeCart.merchant_branch_id),
+        name: String(activeCart.merchant_name || ''),
+      });
+    }
+    if (state.selectedMerchant?.branchId) {
+      candidates.push({
+        merchantId: state.selectedMerchant.id,
+        branchId: state.selectedMerchant.branchId,
+        name: state.selectedMerchant.name,
+      });
+    }
+
+    if (state.pendingOrderBatchId) {
+      const batch = await orderBatchService.getBatchSummary(state.pendingOrderBatchId, { refreshQuotes: false });
+      for (const child of batch.children) {
+        candidates.push({
+          merchantId: child.merchantId,
+          branchId: child.merchantBranchId,
+          name: child.merchantName,
+          batchChildCartId: child.cartId,
+        });
+      }
+      if (args.batch_child_index) {
+        const child = batch.children[Number(args.batch_child_index) - 1];
+        return child
+          ? { merchantId: child.merchantId, branchId: child.merchantBranchId, name: child.merchantName, batchChildCartId: child.cartId }
+          : null;
+      }
+    }
+
+    const unique = [...new Map(candidates.filter((candidate) => candidate.branchId > 0).map((candidate) => [candidate.branchId, candidate])).values()];
+    const reference = String(args.merchant_reference || '').trim().toLocaleLowerCase();
+    if (reference) {
+      const matches = unique.filter((candidate) => {
+        const name = candidate.name.toLocaleLowerCase();
+        return name === reference || name.includes(reference) || reference.includes(name);
+      });
+      return matches.length === 1 ? matches[0] : null;
+    }
+    if (args.scope === 'selected_merchant') {
+      return state.selectedMerchant?.branchId
+        ? { merchantId: state.selectedMerchant.id, branchId: state.selectedMerchant.branchId, name: state.selectedMerchant.name }
+        : null;
+    }
+    // A pending multi-order plan has several merchants; force Gemini to make
+    // the reference explicit rather than silently selecting the wrong child.
+    if (state.pendingOrderBatchId && unique.length > 1) return null;
+    return unique[0] || null;
+  }
+
+  /** Preserve legal state history when browsing begins after an order. */
+  private transitionToOptionSelection(state: AIConversationState): boolean {
+    if (state.stage === 'MULTI_ORDER_REVIEW') return true;
+    if (state.stage === 'ORDER_PLACED' || state.stage === 'TRACKING_ORDER') {
+      if (!transitionConversationStage(state, 'SEARCHING')) return false;
+    }
+    return transitionConversationStage(state, 'SELECTING_OPTION');
+  }
+
+  /**
    * Execute a single controlled tool against the backend services.
    */
   async executeTool(
@@ -348,7 +423,7 @@ export class AiToolsExecutor {
         if (maxBudget) {
           state.activeBudget = { amount: maxBudget, currency: 'USD' };
         }
-        transitionConversationStage(state, 'SELECTING_OPTION');
+        this.transitionToOptionSelection(state);
 
         return {
           toolName,
@@ -403,34 +478,61 @@ export class AiToolsExecutor {
       }
 
       case 'list_category_options': {
-        const activeCart = await cartService.getActiveCartReadOnly(customerId);
-        const branchId = validatedArgs.scope === 'selected_merchant'
-          ? state.selectedMerchant?.branchId || null
-          : activeCart?.merchant_branch_id || state.selectedMerchant?.branchId || null;
-        if (!branchId) {
+        const merchant = await this.resolveMerchantContext(customerId, state, validatedArgs);
+        if (!merchant) {
           return {
             toolName,
             success: false,
-            error: 'CURRENT_MERCHANT_REQUIRED',
-            errorCode: 'CURRENT_MERCHANT_REQUIRED',
+            error: 'MERCHANT_REFERENCE_REQUIRED',
+            errorCode: 'MERCHANT_REFERENCE_REQUIRED',
             stateChanged: false,
           };
         }
-        const options = await catalogService.listVerifiedCategoryOptions(branchId, validatedArgs.category);
+        const categoryOptions = await catalogService.listVerifiedCategoryOptions(merchant.branchId, validatedArgs.category);
         state.pendingProductCategory = validatedArgs.category;
-        state.pendingProductMerchantBranchId = branchId;
-        state.lastPresentedOptions = options;
+        state.pendingProductMerchantBranchId = merchant.branchId;
+        state.lastPresentedOptions = categoryOptions;
         state.nextRequiredAction = 'SELECT_PRODUCT_OPTION';
         state.expectedEntity = 'product_option';
-        transitionConversationStage(state, 'SELECTING_OPTION');
+        this.transitionToOptionSelection(state);
         return {
           toolName,
           success: true,
           result: {
             category: validatedArgs.category,
-            merchant_name: options[0]?.merchantName || activeCart?.merchant_name || state.selectedMerchant?.name || null,
-            count: options.length,
-            options: options.map((option, index) => ({
+            merchant_name: merchant.name,
+            count: categoryOptions.length,
+            options: categoryOptions.map((option, index) => ({
+              option_index: index + 1,
+              product_name: option.productName,
+              merchant_name: option.merchantName,
+              price: `$${option.basePrice.toFixed(2)}`,
+            })),
+          },
+          stateChanged: true,
+        };
+      }
+
+      case 'list_merchant_menu': {
+        const merchant = await this.resolveMerchantContext(customerId, state, validatedArgs);
+        if (!merchant) {
+          return { toolName, success: false, error: 'MERCHANT_REFERENCE_REQUIRED', errorCode: 'MERCHANT_REFERENCE_REQUIRED', stateChanged: false };
+        }
+        const menuOptions = await catalogService.listVerifiedMerchantMenu(merchant.branchId, { category: validatedArgs.category || null });
+        state.pendingProductCategory = validatedArgs.category || null;
+        state.pendingProductMerchantBranchId = merchant.branchId;
+        state.lastPresentedOptions = menuOptions;
+        state.nextRequiredAction = 'SELECT_PRODUCT_OPTION';
+        state.expectedEntity = 'product_option';
+        this.transitionToOptionSelection(state);
+        return {
+          toolName,
+          success: true,
+          result: {
+            merchant_name: merchant.name,
+            category: validatedArgs.category || null,
+            count: menuOptions.length,
+            options: menuOptions.map((option, index) => ({
               option_index: index + 1,
               product_name: option.productName,
               merchant_name: option.merchantName,
@@ -444,7 +546,7 @@ export class AiToolsExecutor {
       case 'compare_supermarket_basket': {
         const items = validatedArgs.items;
         const comparison = await catalogService.compareSupermarketBasket(items, options?.shadowMode);
-        transitionConversationStage(state, 'SELECTING_OPTION');
+        this.transitionToOptionSelection(state);
 
         return {
           toolName,
@@ -508,6 +610,56 @@ export class AiToolsExecutor {
             errorCode: 'PRODUCT_NOT_FOUND',
             stateChanged: false,
           };
+        }
+
+        // A pending batch owns its own child carts. Adding an option from one
+        // of those merchants extends that exact child, rather than treating it
+        // as an unsafe merchant switch on the customer's ordinary cart.
+        if (state.pendingOrderBatchId) {
+          const batch = await orderBatchService.getBatchSummary(state.pendingOrderBatchId, { refreshQuotes: false });
+          const batchChild = batch.children.find((child) => child.merchantBranchId === targetOption!.merchantBranchId);
+          if (batchChild) {
+            if (batchChild.status !== 'REVIEW') {
+              return {
+                toolName,
+                success: false,
+                error: 'BATCH_CHILD_NOT_EDITABLE',
+                errorCode: 'BATCH_CHILD_NOT_EDITABLE',
+                stateChanged: false,
+              };
+            }
+            if (!options?.shadowMode) {
+              await cartService.addItem(
+                batchChild.cartId,
+                targetOption.merchantProductId,
+                validatedArgs.quantity || 1,
+                validatedArgs.customer_notes,
+                validatedArgs.variant_name,
+              );
+            }
+            state.selectedMerchant = {
+              id: targetOption.merchantId,
+              name: targetOption.merchantName,
+              branchId: targetOption.merchantBranchId,
+            };
+            invalidateCheckout(state);
+            state.nextRequiredAction = batch.children.every((child) => child.addressId) ? 'CONFIRM_ORDER_BATCH' : 'SELECT_BATCH_ADDRESS';
+            state.expectedEntity = batch.children.every((child) => child.addressId) ? 'confirm_both_or_child' : 'delivery_address';
+            const refreshedBatch = await orderBatchService.getBatchSummary(state.pendingOrderBatchId, { refreshQuotes: !options?.shadowMode });
+            return {
+              toolName,
+              success: true,
+              result: {
+                success: true,
+                action: 'ADDED_TO_ORDER_BATCH',
+                product: targetOption.productName,
+                quantity: validatedArgs.quantity || 1,
+                batch: this.batchResult(refreshedBatch),
+                shadowExecution: options?.shadowMode || false,
+              },
+              stateChanged: true,
+            };
+          }
         }
 
         // Cross-merchant guard
@@ -1359,7 +1511,7 @@ export class AiToolsExecutor {
       case 'confirm_order_batch': {
         if (!state.pendingOrderBatchId) return { toolName, success: false, error: 'NO_PENDING_ORDER_BATCH', errorCode: 'NO_PENDING_ORDER_BATCH', stateChanged: false };
         const phrase = String(userMessage || validatedArgs.confirmation_phrase || '').trim().toLowerCase();
-        const inferredSelection = validatedArgs.selection || (phrase.includes('both') ? 'both' : phrase.match(/(?:confirm\s+)?([12])\b/)?.[1]);
+        const inferredSelection = validatedArgs.selection || inferBatchSelection(phrase);
         if (!inferredSelection || !['1', '2', 'both'].includes(inferredSelection) || !this.isExplicitConfirmation(phrase.replace('both', '').replace(/\b[12]\b/g, '').trim() || 'confirm')) {
           return { toolName, success: false, error: 'EXPLICIT_BATCH_CONFIRMATION_REQUIRED', errorCode: 'EXPLICIT_CONFIRMATION_REQUIRED', stateChanged: false };
         }

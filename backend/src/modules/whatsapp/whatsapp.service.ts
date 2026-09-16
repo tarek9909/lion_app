@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { config } from '../../config/env.js';
+import { whatsappCredentialService } from './whatsapp-credential.service.js';
 import { query, execute } from '../../database/db.js';
 import { sanitizeCustomerOutput } from '../ai/customer-output.js';
 
@@ -68,12 +69,13 @@ export class WhatsAppService {
    * Ping Meta Graph API endpoint (G-053 live test verification)
    */
   async pingMetaApi(): Promise<{ ok: boolean; status?: number; data?: any; error?: string }> {
-    if (!config.whatsapp.accessToken || !config.whatsapp.phoneNumberId || config.whatsapp.accessToken.startsWith('demo_')) {
+    const accessToken = await whatsappCredentialService.getAccessToken();
+    if (!accessToken || !config.whatsapp.phoneNumberId || accessToken.startsWith('demo_')) {
       return { ok: false, error: 'Credentials not configured (EXTERNAL VERIFICATION PENDING)' };
     }
     try {
       const res = await this.fetchFn(`https://graph.facebook.com/${config.whatsapp.graphApiVersion}/${config.whatsapp.phoneNumberId}`, {
-        headers: { Authorization: `Bearer ${config.whatsapp.accessToken}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
       const data: any = await res.json();
       if (!res.ok) {
@@ -205,10 +207,11 @@ export class WhatsAppService {
     }
 
     // LIVE mode selected - Never fall back to mock (G-053)
+    const accessToken = await whatsappCredentialService.getAccessToken();
     const isConfigured =
-      Boolean(config.whatsapp.accessToken) &&
+      Boolean(accessToken) &&
       Boolean(config.whatsapp.phoneNumberId) &&
-      !config.whatsapp.accessToken.startsWith('demo_') &&
+      !accessToken.startsWith('demo_') &&
       !config.whatsapp.phoneNumberId.startsWith('demo_');
 
     if (!isConfigured) {
@@ -245,7 +248,7 @@ export class WhatsAppService {
         const response = await this.fetchFn(url, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${config.whatsapp.accessToken}`,
+            'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(payload),

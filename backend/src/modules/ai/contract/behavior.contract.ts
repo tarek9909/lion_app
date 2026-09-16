@@ -256,6 +256,7 @@ export type ClarificationType = (typeof CLARIFICATION_TYPES)[number];
 export const READ_ONLY_TOOLS = [
   'search_catalog',
   'list_category_options',
+  'list_merchant_menu',
   'resolve_product_name',
   'compare_supermarket_basket',
   'get_active_cart',
@@ -296,6 +297,7 @@ export function isMutatingTool(toolName: string): boolean {
 export const TOOL_INTENT_MAP: Record<ControlledTool, CanonicalIntent> = {
   search_catalog: 'SEARCH_PRODUCTS',
   list_category_options: 'SEARCH_PRODUCTS',
+  list_merchant_menu: 'SEARCH_PRODUCTS',
   resolve_product_name: 'RESOLVE_PRODUCT_NAME',
   compare_supermarket_basket: 'COMPARE_BASKET',
   get_active_cart: 'VIEW_CART',
@@ -377,6 +379,10 @@ export function isToolAllowedAtStage(stage: ConversationStage, toolName: string)
       'capture_delivery_address',
       'select_delivery_address',
       'rename_delivery_address',
+      'list_category_options',
+      'list_merchant_menu',
+      'resolve_product_name',
+      'add_to_cart',
       'confirm_order_batch',
       'cancel_order_batch_child',
       'get_order_status',

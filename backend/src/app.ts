@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { verifyWebhook, handleWebhook, simulateWhatsAppMessage, getConversations } from './modules/conversations/conversation.controller.js';
+import { getWhatsAppCredentialStatus, saveWhatsAppAccessToken } from './modules/whatsapp/whatsapp-settings.controller.js';
 import {
   getLiveOrders,
   getOrderById,
@@ -68,6 +69,7 @@ import {
   driverDeliverSchema,
   relayMessageSchema,
   whatsappInboxReplySchema,
+  whatsappAccessTokenSchema,
   idParamSchema,
   orderIdParamSchema,
 } from './shared/schemas.js';
@@ -133,6 +135,8 @@ app.get(['/api/whatsapp/inbox/conversations', '/api/v1/whatsapp/inbox/conversati
 app.get(['/api/whatsapp/inbox/conversations/:id', '/api/v1/whatsapp/inbox/conversations/:id'], authenticate, dashboardRoles, validateParams(idParamSchema), getWhatsAppInboxMessages);
 app.get(['/api/whatsapp/inbox/conversations/:id/messages', '/api/v1/whatsapp/inbox/conversations/:id/messages'], authenticate, dashboardRoles, validateParams(idParamSchema), getWhatsAppInboxMessages);
 app.post(['/api/whatsapp/inbox/conversations/:id/reply', '/api/v1/whatsapp/inbox/conversations/:id/reply'], authenticate, dashboardRoles, validateParams(idParamSchema), validateBody(whatsappInboxReplySchema), sendWhatsAppInboxReply);
+app.get(['/api/settings/whatsapp', '/api/v1/settings/whatsapp'], authenticate, requireRoles('SUPERADMIN'), getWhatsAppCredentialStatus);
+app.put(['/api/settings/whatsapp/access-token', '/api/v1/settings/whatsapp/access-token'], authenticate, requireRoles('SUPERADMIN'), validateBody(whatsappAccessTokenSchema), saveWhatsAppAccessToken);
 
 // Catalog & Search (Public browse/search)
 app.get('/api/catalog', getProducts);
