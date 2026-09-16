@@ -172,6 +172,7 @@ export class CustomerService {
     conversationId: number,
     rawAddress: string,
     inboundMessageId?: number | null,
+    saveLabel?: string | null,
   ): Promise<AddressDraftCaptureResult> {
     const value = String(rawAddress || '').trim().slice(0, 1000);
     const normalized = normalizeAddressPhrase(value);
@@ -196,14 +197,42 @@ export class CustomerService {
 
     // A fulfillment-only address is created for this checkout. It is not a
     // default and receives no saved label unless the customer later consents.
+    // A label is only accepted when it comes from an explicit customer request
+    // (the controlled tool schema documents save_label as consented input).
+    // Otherwise keep this checkout-only address distinguishable from a saved
+    // Home/Work address.
+    const requestedLabel = String(saveLabel || '').trim().slice(0, 80);
+    const label = requestedLabel || 'Delivery address';
     const addressResult: any = await execute(
       `INSERT INTO customer_addresses
        (public_id, customer_id, label, formatted_address, area_name, is_default, status)
-       VALUES (?, ?, 'Delivery address', ?, ?, 0, 'ACTIVE')`,
-      [uuidv4(), customerId, value, area],
+       VALUES (?, ?, ?, ?, ?, 0, 'ACTIVE')`,
+      [uuidv4(), customerId, label, value, area],
     );
     const addressRows = await query<CustomerAddress[]>(`SELECT * FROM customer_addresses WHERE id = ? LIMIT 1`, [addressResult.insertId]);
     return { draftId, status, address: addressRows[0], area, safeSummary };
+  }
+
+  /**
+   * Rename only an address owned by this customer. Labels are intentionally
+   * allowed to collide; selection then asks for clarification instead of
+   * silently guessing between two Home/Work addresses.
+   */
+  async renameCustomerAddress(customerId: number, addressId: number, label: string): Promise<CustomerAddress> {
+    const cleanLabel = String(label || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (!cleanLabel) throw new Error('A delivery address label is required');
+    const result: any = await execute(
+      `UPDATE customer_addresses
+       SET label = ?
+       WHERE id = ? AND customer_id = ? AND status = 'ACTIVE'`,
+      [cleanLabel, addressId, customerId],
+    );
+    if (!result.affectedRows) throw new Error('Selected address not found for customer');
+    const rows = await query<CustomerAddress[]>(
+      `SELECT * FROM customer_addresses WHERE id = ? AND customer_id = ? LIMIT 1`,
+      [addressId, customerId],
+    );
+    return rows[0];
   }
 
   async getAllCustomers(): Promise<any[]> {

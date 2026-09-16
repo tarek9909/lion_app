@@ -342,7 +342,7 @@ export class CatalogService {
       }
     }
 
-    const verifiedAlternatives = await this.getVerifiedAlternatives(
+    const verifiedAlternatives = await this.listVerifiedCategoryOptions(
       merchantBranchId,
       options?.category || null,
     );
@@ -370,7 +370,12 @@ export class CatalogService {
     return [...new Set(candidateMap[normalized] || [])];
   }
 
-  private async getVerifiedAlternatives(
+  /**
+   * Return only currently verified merchant options for a category. This is a
+   * catalog capability, not an intent heuristic; the AI decides when to ask
+   * for a category and the server scopes it to trusted merchant state.
+   */
+  async listVerifiedCategoryOptions(
     merchantBranchId: number | null,
     category: string | null,
   ): Promise<SearchResult[]> {

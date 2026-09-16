@@ -402,6 +402,45 @@ export class AiToolsExecutor {
         };
       }
 
+      case 'list_category_options': {
+        const activeCart = await cartService.getActiveCartReadOnly(customerId);
+        const branchId = validatedArgs.scope === 'selected_merchant'
+          ? state.selectedMerchant?.branchId || null
+          : activeCart?.merchant_branch_id || state.selectedMerchant?.branchId || null;
+        if (!branchId) {
+          return {
+            toolName,
+            success: false,
+            error: 'CURRENT_MERCHANT_REQUIRED',
+            errorCode: 'CURRENT_MERCHANT_REQUIRED',
+            stateChanged: false,
+          };
+        }
+        const options = await catalogService.listVerifiedCategoryOptions(branchId, validatedArgs.category);
+        state.pendingProductCategory = validatedArgs.category;
+        state.pendingProductMerchantBranchId = branchId;
+        state.lastPresentedOptions = options;
+        state.nextRequiredAction = 'SELECT_PRODUCT_OPTION';
+        state.expectedEntity = 'product_option';
+        transitionConversationStage(state, 'SELECTING_OPTION');
+        return {
+          toolName,
+          success: true,
+          result: {
+            category: validatedArgs.category,
+            merchant_name: options[0]?.merchantName || activeCart?.merchant_name || state.selectedMerchant?.name || null,
+            count: options.length,
+            options: options.map((option, index) => ({
+              option_index: index + 1,
+              product_name: option.productName,
+              merchant_name: option.merchantName,
+              price: `$${option.basePrice.toFixed(2)}`,
+            })),
+          },
+          stateChanged: true,
+        };
+      }
+
       case 'compare_supermarket_basket': {
         const items = validatedArgs.items;
         const comparison = await catalogService.compareSupermarketBasket(items, options?.shadowMode);
@@ -865,13 +904,14 @@ export class AiToolsExecutor {
           conversationId,
           validatedArgs.raw_address,
           state.lastProcessedMessageId || null,
+          validatedArgs.save_label || null,
         );
         state.addressDraft = {
           id: draft.draftId,
           status: draft.status,
           area: draft.area || null,
           summary: draft.safeSummary,
-          saveConsent: 'pending',
+          saveConsent: validatedArgs.save_label ? 'accepted' : 'pending',
         };
         state.nextRequiredAction = draft.status === 'serviceable' ? 'CONFIRM_DELIVERY_ADDRESS_DRAFT' : 'PROVIDE_ADDRESS_DETAIL';
         state.expectedEntity = draft.status === 'serviceable' ? 'address_confirmation' : 'location_or_landmark';
@@ -909,6 +949,46 @@ export class AiToolsExecutor {
             ready_for_confirmation: true,
           },
           cartSummary: summary,
+          stateChanged: true,
+        };
+      }
+
+      case 'rename_delivery_address': {
+        if (!state.selectedAddress?.id) {
+          return {
+            toolName,
+            success: false,
+            error: 'No selected delivery address to rename.',
+            errorCode: 'ADDRESS_NOT_FOUND',
+            stateChanged: false,
+          };
+        }
+        const renamed = await customerService.renameCustomerAddress(
+          customerId,
+          state.selectedAddress.id,
+          validatedArgs.address_label,
+        );
+        state.selectedAddress = {
+          id: renamed.id,
+          label: renamed.label,
+          formatted: renamed.formatted_address || renamed.label,
+          area: renamed.area_name || undefined,
+        };
+        if (state.addressDraft) state.addressDraft.saveConsent = 'accepted';
+        // The address label is part of the checkout fingerprint shown to the
+        // customer, so force a fresh review after a rename.
+        state.checkoutFingerprint = this.generateCheckoutFingerprint(state.cartSummary, state.selectedAddress);
+        state.awaitingConfirmation = Boolean(state.checkoutFingerprint);
+        state.nextRequiredAction = state.pendingOrderBatchId ? 'CONFIRM_ORDER_BATCH' : 'CONFIRM_ORDER';
+        state.expectedEntity = state.pendingOrderBatchId ? 'confirm_both_or_child' : 'explicit_confirmation';
+        return {
+          toolName,
+          success: true,
+          result: {
+            address_label: renamed.label,
+            formatted: renamed.formatted_address || renamed.label,
+            action: 'ADDRESS_RENAMED',
+          },
           stateChanged: true,
         };
       }
@@ -1205,10 +1285,33 @@ export class AiToolsExecutor {
 
       case 'create_multi_order_plan': {
         const active = await cartService.getActiveCartReadOnly(customerId);
-        const selections = (validatedArgs.items || []).map((item: any) => ({
+        let selections = (validatedArgs.items || []).map((item: any) => ({
           merchantProductId: item.merchant_product_id,
           quantity: item.quantity || 1,
         }));
+        if (validatedArgs.selection_source === 'last_presented_options') {
+          const indexes: number[] = [...new Set<number>((validatedArgs.selected_option_indexes || []).map((value: any) => Number(value)))];
+          const resolved = indexes.map((index) => state.lastPresentedOptions[index - 1]).filter(Boolean);
+          if (resolved.length !== indexes.length || resolved.length < 2) {
+            return {
+              toolName,
+              success: false,
+              error: 'PRESENTED_OPTION_SELECTION_INVALID',
+              errorCode: 'PRESENTED_OPTION_SELECTION_INVALID',
+              stateChanged: false,
+            };
+          }
+          selections = resolved.map((option) => ({ merchantProductId: option.merchantProductId, quantity: 1 }));
+        }
+        if (!active?.items?.length && selections.length < 2) {
+          return {
+            toolName,
+            success: false,
+            error: 'MULTI_ORDER_SELECTION_REQUIRED',
+            errorCode: 'MULTI_ORDER_SELECTION_REQUIRED',
+            stateChanged: false,
+          };
+        }
         const batchSelectionKey = selections
           .map((item: any) => `${item.merchantProductId}:${item.quantity}`)
           .sort()

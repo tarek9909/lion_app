@@ -6,8 +6,79 @@ import { v4 as uuidv4 } from 'uuid';
 import { whatsappService } from '../whatsapp/whatsapp.service.js';
 import { config } from '../../config/env.js';
 import { convertUsdToLbp } from '../../shared/money.js';
+import { sanitizeCustomerOutput } from '../ai/customer-output.js';
 
 export class OrderService {
+  private async getCustomerNotificationLanguage(customerId: number): Promise<string> {
+    const rows = await query<any[]>(`
+      SELECT COALESCE(cp.preferred_language, c.preferred_language, 'en') AS preferred_language
+      FROM customers c
+      LEFT JOIN customer_preferences cp ON cp.customer_id = c.id
+      WHERE c.id = ?
+      LIMIT 1
+    `, [customerId]);
+    const language = String(rows[0]?.preferred_language || 'en').toLowerCase();
+    return ['arabizi', 'ar', 'ar_lb', 'mixed', 'fr'].includes(language) ? language : 'en';
+  }
+
+  private orderStatusNotification(
+    event: 'ACCEPTED' | 'REJECTED' | 'DRIVER_ASSIGNED' | 'PICKED_UP' | 'DELIVERED',
+    order: Order,
+    language: string,
+    preparationMinutes?: number,
+    rejectionReason?: string,
+  ): string {
+    const number = order.order_number;
+    const merchant = order.merchant_name || 'the restaurant';
+    const captain = order.driver_name || 'Ahmad';
+    const address = order.address_label || 'delivery address';
+    const minutes = preparationMinutes || 20;
+
+    if (language === 'arabizi') {
+      if (event === 'REJECTED') return sanitizeCustomerOutput(`${merchant} ma 2der y2bal talabak ${number}. ${rejectionReason || 'Baddak ndawwerlak 3a option tene?'}`);
+      if (event === 'ACCEPTED') return sanitizeCustomerOutput(`Khabar 7elo! ${merchant} 2ebel talabak ${number} w ballash y7addro. Ta2riban ${minutes} d2i2a.`);
+      if (event === 'DRIVER_ASSIGNED') return sanitizeCustomerOutput(`Captain ${captain} (${order.driver_code || 'D-101'}) صار ma3ayyan ywasel talabak ${number}.`);
+      if (event === 'PICKED_UP') return sanitizeCustomerOutput(`Talabak ${number} صار ma3 Captain ${captain} w 3al tari2 la ${address}.`);
+      return sanitizeCustomerOutput(`Talabak ${number} wasal. Sahtein w alf hana! 3tina ta2yim men 1 la 5.`);
+    }
+
+    if (language === 'ar' || language === 'ar_lb' || language === 'mixed') {
+      if (event === 'REJECTED') return sanitizeCustomerOutput(`تعذر على ${merchant} قبول طلبك ${number}. ${rejectionReason || 'هل تريد أن نبحث عن خيار آخر؟'}`);
+      if (event === 'ACCEPTED') return sanitizeCustomerOutput(`تم قبول طلبك ${number} من ${merchant} ويجري تحضيره الآن. الوقت التقريبي ${minutes} دقيقة.`);
+      if (event === 'DRIVER_ASSIGNED') return sanitizeCustomerOutput(`تم تعيين الكابتن ${captain} لتوصيل طلبك ${number}.`);
+      if (event === 'PICKED_UP') return sanitizeCustomerOutput(`تم استلام طلبك ${number} وهو في الطريق إلى ${address} مع الكابتن ${captain}.`);
+      return sanitizeCustomerOutput(`وصل طلبك ${number}. صحتين وعافية! قيّم التوصيل من 1 إلى 5.`);
+    }
+
+    if (language === 'fr') {
+      if (event === 'REJECTED') return sanitizeCustomerOutput(`${merchant} n’a pas pu accepter votre commande ${number}. ${rejectionReason || 'Voulez-vous une autre option ?'}`);
+      if (event === 'ACCEPTED') return sanitizeCustomerOutput(`Bonne nouvelle : ${merchant} a accepté votre commande ${number} et la prépare. Environ ${minutes} minutes.`);
+      if (event === 'DRIVER_ASSIGNED') return sanitizeCustomerOutput(`Le capitaine ${captain} est chargé de livrer votre commande ${number}.`);
+      if (event === 'PICKED_UP') return sanitizeCustomerOutput(`Votre commande ${number} est en route vers ${address} avec le capitaine ${captain}.`);
+      return sanitizeCustomerOutput(`Votre commande ${number} est arrivée. Bon appétit ! Notez la livraison de 1 à 5.`);
+    }
+
+    if (event === 'REJECTED') return sanitizeCustomerOutput(`${merchant} could not accept your order ${number}. ${rejectionReason || 'Would you like another option?'}`);
+    if (event === 'ACCEPTED') return sanitizeCustomerOutput(`Great news! ${merchant} accepted your order ${number} and is preparing it now. About ${minutes} minutes.`);
+    if (event === 'DRIVER_ASSIGNED') return sanitizeCustomerOutput(`Captain ${captain} (${order.driver_code || 'D-101'}) has been assigned to deliver your order ${number}.`);
+    if (event === 'PICKED_UP') return sanitizeCustomerOutput(`Your order ${number} has been picked up by Captain ${captain} and is on the way to ${address}.`);
+    return sanitizeCustomerOutput(`Your order ${number} has arrived. Enjoy! Please rate the delivery from 1 to 5.`);
+  }
+
+  private async notifyCustomerOrderStatus(
+    event: 'ACCEPTED' | 'REJECTED' | 'DRIVER_ASSIGNED' | 'PICKED_UP' | 'DELIVERED',
+    order: Order,
+    preparationMinutes?: number,
+    rejectionReason?: string,
+  ): Promise<void> {
+    if (!order.customer_phone) return;
+    const language = await this.getCustomerNotificationLanguage(order.customer_id);
+    await whatsappService.sendMessage(
+      order.customer_phone,
+      this.orderStatusNotification(event, order, language, preparationMinutes, rejectionReason),
+    );
+  }
+
   /**
    * Create Order from Active Cart with Idempotency and Checkout Revalidation (G-032, G-033)
    */
@@ -402,13 +473,8 @@ export class OrderService {
     const updated = (await this.getOrderById(orderId))!;
     broadcastEvent('ORDER_UPDATED', updated);
 
-    // Emit outbound customer notification (G-034)
-    if (updated.customer_phone) {
-      await whatsappService.sendMessage(
-        updated.customer_phone,
-        `👨‍🍳 Great news! *${updated.merchant_name}* accepted your order #${updated.order_number} and is preparing it now. (~${preparationMinutes} mins)`
-      );
-    }
+    // Emit language-matched, plain-text customer notification.
+    await this.notifyCustomerOrderStatus('ACCEPTED', updated, preparationMinutes);
 
     return updated;
   }
@@ -438,13 +504,8 @@ export class OrderService {
     const updated = (await this.getOrderById(orderId))!;
     broadcastEvent('ORDER_UPDATED', updated);
 
-    // Emit outbound customer notification (G-034)
-    if (updated.customer_phone) {
-      await whatsappService.sendMessage(
-        updated.customer_phone,
-        `⚠️ We are sorry! *${updated.merchant_name}* was unable to accept your order #${updated.order_number} (${reason}). Would you like me to find a similar meal from another restaurant nearby?`
-      );
-    }
+    // Keep even failure updates language-matched and free of presentation markup.
+    await this.notifyCustomerOrderStatus('REJECTED', updated, undefined, reason);
 
     return updated;
   }
@@ -648,13 +709,8 @@ export class OrderService {
     const updated = (await this.getOrderById(orderId))!;
     broadcastEvent('ORDER_UPDATED', updated);
 
-    // Outbound customer notification
-    if (updated.customer_phone) {
-      await whatsappService.sendMessage(
-        updated.customer_phone,
-        `🛵 Captain *${updated.driver_name || 'Ahmad'}* (${updated.driver_code || 'D-101'}) has been assigned to deliver your order #${updated.order_number}!`
-      );
-    }
+    // Outbound customer notification in the customer's saved conversation language.
+    await this.notifyCustomerOrderStatus('DRIVER_ASSIGNED', updated);
 
     return updated;
   }
@@ -684,13 +740,8 @@ export class OrderService {
     const updated = (await this.getOrderById(orderId))!;
     broadcastEvent('ORDER_UPDATED', updated);
 
-    // Outbound customer notification
-    if (updated.customer_phone) {
-      await whatsappService.sendMessage(
-        updated.customer_phone,
-        `🚀 Your order #${updated.order_number} has been picked up by Captain ${updated.driver_name || 'Ahmad'} and is on the way to ${updated.address_label || 'Home'}!`
-      );
-    }
+    // The selected label (for example Home) is loaded from the verified address record.
+    await this.notifyCustomerOrderStatus('PICKED_UP', updated);
 
     return updated;
   }
@@ -737,13 +788,8 @@ export class OrderService {
     const updated = (await this.getOrderById(orderId))!;
     broadcastEvent('ORDER_UPDATED', updated);
 
-    // Outbound customer notification asking for review/rating (G-034)
-    if (updated.customer_phone) {
-      await whatsappService.sendMessage(
-        updated.customer_phone,
-        `🎉 Your order #${updated.order_number} has arrived! Sahtein w Alf Hana! 🦁\n\nPlease let us know how your delivery was by rating from 1 to 5 stars.`
-      );
-    }
+    // Outbound customer notification asking for a review in the same language.
+    await this.notifyCustomerOrderStatus('DELIVERED', updated);
 
     return updated;
   }

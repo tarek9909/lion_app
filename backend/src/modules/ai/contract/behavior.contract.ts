@@ -29,6 +29,7 @@ export const CANONICAL_INTENTS = [
   'ADD_ITEM_NOTE',
   'SELECT_ADDRESS',
   'CAPTURE_DELIVERY_ADDRESS',
+  'RENAME_DELIVERY_ADDRESS',
   'CHECKOUT_PREVIEW',
   'CONFIRM_ORDER',
   'CREATE_MULTI_ORDER_PLAN',
@@ -163,6 +164,7 @@ export function toLegacyIntent(canonical: CanonicalIntent): LegacyIntent {
       return 'PRODUCT_MODIFICATION';
     case 'SELECT_ADDRESS':
     case 'CAPTURE_DELIVERY_ADDRESS':
+    case 'RENAME_DELIVERY_ADDRESS':
       return 'ADDRESS_SELECTED';
     case 'CHECKOUT_PREVIEW':
       return 'CHECKOUT_PREVIEW';
@@ -253,6 +255,7 @@ export type ClarificationType = (typeof CLARIFICATION_TYPES)[number];
 // -----------------------------------------------------------------------------
 export const READ_ONLY_TOOLS = [
   'search_catalog',
+  'list_category_options',
   'resolve_product_name',
   'compare_supermarket_basket',
   'get_active_cart',
@@ -273,6 +276,7 @@ export const MUTATING_TOOLS = [
   'clear_cart',
   'select_delivery_address',
   'capture_delivery_address',
+  'rename_delivery_address',
   'confirm_and_create_order',
   'create_multi_order_plan',
   'set_batch_delivery_address',
@@ -291,6 +295,7 @@ export function isMutatingTool(toolName: string): boolean {
 
 export const TOOL_INTENT_MAP: Record<ControlledTool, CanonicalIntent> = {
   search_catalog: 'SEARCH_PRODUCTS',
+  list_category_options: 'SEARCH_PRODUCTS',
   resolve_product_name: 'RESOLVE_PRODUCT_NAME',
   compare_supermarket_basket: 'COMPARE_BASKET',
   get_active_cart: 'VIEW_CART',
@@ -304,6 +309,7 @@ export const TOOL_INTENT_MAP: Record<ControlledTool, CanonicalIntent> = {
   get_customer_addresses: 'SELECT_ADDRESS',
   select_delivery_address: 'SELECT_ADDRESS',
   capture_delivery_address: 'CAPTURE_DELIVERY_ADDRESS',
+  rename_delivery_address: 'RENAME_DELIVERY_ADDRESS',
   confirm_and_create_order: 'CONFIRM_ORDER',
   create_multi_order_plan: 'CREATE_MULTI_ORDER_PLAN',
   review_multi_order_plan: 'REVIEW_MULTI_ORDER_PLAN',
@@ -359,6 +365,7 @@ export function isToolAllowedAtStage(stage: ConversationStage, toolName: string)
       'get_customer_addresses',
       'select_delivery_address',
       'capture_delivery_address',
+      'rename_delivery_address',
       'get_order_status',
       'request_human_support',
     ].includes(toolName);
@@ -369,6 +376,7 @@ export function isToolAllowedAtStage(stage: ConversationStage, toolName: string)
       'set_batch_delivery_address',
       'capture_delivery_address',
       'select_delivery_address',
+      'rename_delivery_address',
       'confirm_order_batch',
       'cancel_order_batch_child',
       'get_order_status',

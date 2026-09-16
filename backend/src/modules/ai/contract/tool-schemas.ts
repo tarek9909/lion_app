@@ -57,6 +57,26 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
     },
   },
 
+  list_category_options: {
+    name: 'list_category_options',
+    description: 'Show verified options in a category from the current cart merchant or another explicitly selected merchant context. Use this for natural requests such as adding a drink, dessert, or side.',
+    parameters: {
+      category: {
+        type: 'STRING',
+        description: 'Requested product category, for example beverage, dessert, side, burger, or crispy chicken.',
+        required: true,
+        min: 1,
+        max: 80,
+      },
+      scope: {
+        type: 'STRING',
+        description: 'Use current_cart_merchant when modifying an existing cart. The server resolves the merchant from verified state.',
+        required: false,
+        enum: ['current_cart_merchant', 'selected_merchant'],
+      },
+    },
+  },
+
   resolve_product_name: {
     name: 'resolve_product_name',
     description: 'Resolve a short product follow-up using verified aliases, spelling candidates, and the current merchant menu. Never substitutes an unavailable product.',
@@ -347,6 +367,20 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
     },
   },
 
+  rename_delivery_address: {
+    name: 'rename_delivery_address',
+    description: 'Rename the currently selected customer delivery address after the customer explicitly asks to save or rename it, for example as Home or Work.',
+    parameters: {
+      address_label: {
+        type: 'STRING',
+        description: 'Explicit customer-provided label such as Home or Work.',
+        required: true,
+        min: 1,
+        max: 80,
+      },
+    },
+  },
+
   confirm_and_create_order: {
     name: 'confirm_and_create_order',
     description: 'Place the order after final summary review and explicit customer confirmation. Idempotent.',
@@ -405,6 +439,26 @@ export const CANONICAL_TOOL_SPECS: Record<string, ToolDefinitionSpec> = {
               max: 99,
             },
           },
+        },
+      },
+      selection_source: {
+        type: 'STRING',
+        description: 'Use last_presented_options when the customer selects recommendations already shown in this conversation. The server resolves safe indexes to verified products.',
+        required: false,
+        enum: ['last_presented_options'],
+      },
+      selected_option_indexes: {
+        type: 'ARRAY',
+        description: 'One-based indexes of previously shown product recommendations. Never supply database IDs for this mode.',
+        required: false,
+        min: 2,
+        max: 20,
+        items: {
+          type: 'INTEGER',
+          description: 'One-based previously shown option index.',
+          required: true,
+          min: 1,
+          max: 20,
         },
       },
       same_address: {
@@ -696,6 +750,7 @@ export function buildGeminiDeclaration(spec: ToolDefinitionSpec): any {
 
 // Concrete generated Zod schemas
 export const SearchCatalogSchema = buildZodSchema(CANONICAL_TOOL_SPECS.search_catalog);
+export const ListCategoryOptionsSchema = buildZodSchema(CANONICAL_TOOL_SPECS.list_category_options);
 export const ResolveProductNameSchema = buildZodSchema(CANONICAL_TOOL_SPECS.resolve_product_name);
 export const CompareSupermarketBasketSchema = buildZodSchema(CANONICAL_TOOL_SPECS.compare_supermarket_basket);
 export const GetActiveCartSchema = buildZodSchema(CANONICAL_TOOL_SPECS.get_active_cart);
@@ -708,6 +763,7 @@ export const ClearCartSchema = buildZodSchema(CANONICAL_TOOL_SPECS.clear_cart);
 export const ListSavedAddressesSchema = buildZodSchema(CANONICAL_TOOL_SPECS.list_saved_addresses);
 export const SelectDeliveryAddressSchema = buildZodSchema(CANONICAL_TOOL_SPECS.select_delivery_address);
 export const CaptureDeliveryAddressSchema = buildZodSchema(CANONICAL_TOOL_SPECS.capture_delivery_address);
+export const RenameDeliveryAddressSchema = buildZodSchema(CANONICAL_TOOL_SPECS.rename_delivery_address);
 export const ConfirmAndCreateOrderSchema = buildZodSchema(CANONICAL_TOOL_SPECS.confirm_and_create_order);
 export const CreateMultiOrderPlanSchema = buildZodSchema(CANONICAL_TOOL_SPECS.create_multi_order_plan);
 export const ReviewMultiOrderPlanSchema = buildZodSchema(CANONICAL_TOOL_SPECS.review_multi_order_plan);
@@ -721,6 +777,7 @@ export const SwitchMerchantRejectSchema = buildZodSchema(CANONICAL_TOOL_SPECS.sw
 
 export const ToolArgumentSchemas = {
   search_catalog: SearchCatalogSchema,
+  list_category_options: ListCategoryOptionsSchema,
   resolve_product_name: ResolveProductNameSchema,
   compare_supermarket_basket: CompareSupermarketBasketSchema,
   get_active_cart: GetActiveCartSchema,
@@ -734,6 +791,7 @@ export const ToolArgumentSchemas = {
   get_customer_addresses: ListSavedAddressesSchema,
   select_delivery_address: SelectDeliveryAddressSchema,
   capture_delivery_address: CaptureDeliveryAddressSchema,
+  rename_delivery_address: RenameDeliveryAddressSchema,
   confirm_and_create_order: ConfirmAndCreateOrderSchema,
   create_multi_order_plan: CreateMultiOrderPlanSchema,
   review_multi_order_plan: ReviewMultiOrderPlanSchema,

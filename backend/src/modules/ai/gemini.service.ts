@@ -49,6 +49,8 @@ import { taskStackService } from './context/task-stack.service.js';
 import { groundedResponseVerifier } from './verification/grounded-response-verifier.js';
 import { outcomeObserverService } from './learning/outcome-observer.service.js';
 import { StateVersionConflictError } from './state/ai-state.types.js';
+import { validateStructuredDecision } from './planning/decision.schema.js';
+import { actionPolicyService } from './policy/action-policy.service.js';
 
 export function detectLanguage(text: string): string {
   return detectSenderLanguage(text);
@@ -864,9 +866,43 @@ export class GeminiService {
 
           let toolResult: any;
           let toolErrorCode: string | undefined;
+          // The customer’s explicit confirmation is the authorization, not a
+          // model-invented argument. Preserve the raw turn for the policy
+          // decision just as the executor does before its own validation.
+          const policyToolArgs = toolName === 'confirm_and_create_order' && !toolArgs.confirmation_phrase
+            ? { ...toolArgs, confirmation_phrase: text }
+            : toolArgs;
+          const decisionValidation = validateStructuredDecision({
+            reply_language: responseLanguage,
+            task_relation: state.nextRequiredAction ? 'ANSWER_TO_PENDING_TASK' : 'NEW_TASK',
+            intent: TOOL_INTENT_MAP[toolName as ControlledTool] || 'UNKNOWN',
+            response_category: 'NORMAL',
+            decision: 'CALL_TOOL',
+            tool: { name: toolName, arguments: policyToolArgs },
+            risk: isMutatingTool(toolName) ? 'MUTATION_REVERSIBLE' : 'SAFE_READ_ONLY',
+          });
+          const policyCart = decisionValidation.success
+            ? await cartService.getActiveCartReadOnly(customer.id)
+            : null;
+          const policy = decisionValidation.success
+            ? actionPolicyService.evaluatePolicy(decisionValidation.decision!, state, {
+              hasActiveCart: Boolean(policyCart?.items?.length),
+              hasSelectedAddress: Boolean(state.selectedAddress),
+              awaitingConfirmation: state.awaitingConfirmation,
+              checkoutFingerprint: state.checkoutFingerprint,
+              isExplicitCartClearRequested: isExplicitCartClearRequest(text),
+            })
+            : { allowed: false, violationCode: 'INVALID_AI_DECISION', violationMessage: decisionValidation.errors?.join('; ') || 'Invalid AI decision.' };
 
           // Maintain ONE mutation counter across all Gemini tool rounds for the complete turn
-          if (isMutatingTool(toolName) && mutationsExecutedCount >= 1) {
+          if (!policy.allowed) {
+            toolResult = {
+              success: false,
+              error: policy.violationMessage || 'AI_DECISION_REJECTED',
+              message: policy.rejectionReason || 'I need a safe, explicit instruction before I can complete that action.',
+            };
+            toolErrorCode = policy.violationCode || 'AI_DECISION_REJECTED';
+          } else if (isMutatingTool(toolName) && mutationsExecutedCount >= 1) {
             toolResult = {
               success: false,
               error: 'CONFLICTING_MUTATIONS_NOT_ALLOWED',
@@ -1005,6 +1041,8 @@ export class GeminiService {
       ? ((getCustomerResponseCategory(customerError.errorCode, customerError.errorMessage, customerError.result) || 'NORMAL') as CustomerResponseCategory)
       : primaryIntent === 'CLARIFICATION' || primaryIntent === 'CONTINUE_PENDING_TASK'
         ? 'CLARIFICATION'
+        : recordedToolCalls.some((entry) => entry.name === 'create_multi_order_plan' || entry.name === 'review_multi_order_plan')
+          ? 'MULTI_ORDER_PLAN'
         : primaryIntent === 'ORDER_STATUS' && recordedToolResults.some((entry) => getCustomerResponseCategory(entry.errorCode, undefined, entry.result) === 'NO_ACTIVE_ORDER')
           ? 'NO_ACTIVE_ORDER'
           : primaryIntent === 'CONFIRM_ORDER'

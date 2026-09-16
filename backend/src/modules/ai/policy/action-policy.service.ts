@@ -88,8 +88,8 @@ export class ActionPolicyService {
 
     // 3. BATCH ORDER CONFIRMATION
     if (toolName === 'confirm_order_batch') {
-      const selection = args.selection;
-      if (!['CONFIRM_ALL', 'CONFIRM_1', 'CONFIRM_2', 'CANCEL_ALL'].includes(selection)) {
+      const selection = String(args.selection || '').toLowerCase();
+      if (!['1', '2', 'both'].includes(selection)) {
         return {
           allowed: false,
           violationCode: 'INVALID_BATCH_SELECTION',
