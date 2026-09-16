@@ -112,7 +112,7 @@ function normalize(text: string): string {
 }
 
 function wordTokens(text: string): string[] {
-  return normalize(text).match(/[\p{L}]+(?:'[\p{L}]+)?/gu) || [];
+  return normalize(text).match(/[\p{L}0-9]+(?:'[\p{L}0-9]+)?/gu) || [];
 }
 
 function hasScript(text: string, script: RegExp): boolean {
@@ -134,8 +134,8 @@ function profileScore(text: string, profile: LanguageProfile): number {
 
 function arabiziScore(text: string): number {
   const normalized = normalize(text);
-  const strongWords = /\b(?:bade|baddi|badde|baddak|baddik|zidli|sawiya|sawiyon|kifak|kifik|shou|shu|chou|wein|wen|3al|3albet|3andon|3andak|3ndak|3ndk|3tene|kaza|fadde|fade|ma7eyun|ma7eon|kullun|kullon|akid|akeed|ta2kid|ya3tik|ma2liyeh|mosa3adeh|a7san|arkhas|kabbis|mar7aba|tfaddal|bse3dak|wrjene|warjine|farjine|fiyi|fina|mbala|ehh?|tamam|shukran|3enna|mat3am|ma7al)\b/g;
-  const encodedWords = /\b[a-z]*[2356789][a-z]+\b/g;
+  const strongWords = /\b(?:bade|baddi|badde|baddak|baddik|zidli|sawiya|sawiyon|kifak|kifik|shou|shu|chou|wein|wen|3al|3albet|3andon|3andak|3ndak|3ndk|3tene|kaza|fadde|fade|ma7eyun|ma7eon|kullun|kullon|akid|akeed|ta2kid|ya3tik|ma2liyeh|mosa3adeh|a7san|arkhas|kabbis|mar7aba|tfaddal|bse3dak|wrjene|warjine|farjine|fiyi|fina|mbala|ehh?|tamam|shukran|3enna|mat3am|ma7al|khalas|khlas|betlub|btolob|etlob|talab|b3den|ba3den|mbere7|bukra|bokra|hala2|hle2|hbb|habibi|mashkour|sahtein|barke|la2|wle|walaw|yhemmak|salem|salaam|teslam|3afyeh|tsallam|bte7eb|bte3mol|shou2|m3ak|m3allem|tfehamna|ma3lesh|bas|ktir|ktire)\b/g;
+  const encodedWords = /\b[a-z]*[2356789][a-z0-9]*\b/g;
   const strongMatches = normalized.match(strongWords)?.length || 0;
   const encodedMatches = normalized.match(encodedWords)?.length || 0;
   return strongMatches * 3 + encodedMatches * 2;
@@ -166,8 +166,8 @@ export function detectSenderLanguage(text: string): SenderLanguage {
     .map((profile) => ({ language: profile.language, score: profileScore(clean, profile) }))
     .sort((a, b) => b.score - a.score);
 
-  // Arabizi markers are deliberately weighted above generic English words.
-  if (arabizi >= 3) return 'arabizi';
+  // Arabizi markers (words or numerals like 2,3,5,7,8) are deliberately weighted above generic English words.
+  if (arabizi >= 2) return 'arabizi';
 
   const best = scores[0];
   const second = scores[1];
@@ -186,7 +186,7 @@ export function detectSenderLanguage(text: string): SenderLanguage {
 export function isContextualConversationFollowUp(text: string): boolean {
   const normalized = normalize(text).replace(/[!?.,]+/g, '').replace(/\s+/g, ' ');
   const tokenCount = wordTokens(normalized).length;
-  return /^(?:yes|no|ok|okay|confirm|clear|empty|delete|keep|view cart|new cart|start over|1|2|3|4|5|no delete it|dont delete it)$/iu.test(normalized) || tokenCount <= 2;
+  return /^(?:yes|no|ok|okay|confirm|clear|empty|delete|keep|view cart|new cart|start over|1|2|3|4|5|no delete it|dont delete it|khalas|khalas betlub b3den|merci|shukran|bye|yalla bye|thanks|not now|later)$/iu.test(normalized) || tokenCount <= 3;
 }
 
 export function resolveConversationLanguage(text: string, previousLanguage?: SenderLanguage | null): SenderLanguage {

@@ -903,7 +903,9 @@ export class GeminiService {
 
     // The prompt is the primary language control. This backend boundary keeps
     // an accidental provider-language drift from reaching WhatsApp.
-    if (!isResponseInSenderLanguage(responseLanguage, finalText)) {
+    const effectiveLang = (state.preferredLanguage && state.preferredLanguage !== 'other') ? state.preferredLanguage : responseLanguage;
+    const isLangMatch = isResponseInSenderLanguage(responseLanguage, finalText) || isResponseInSenderLanguage(effectiveLang, finalText);
+    if (!isLangMatch) {
       finalText = getLanguageSafeFallback(responseLanguage);
     }
     finalText = sanitizeCustomerOutput(finalText);
