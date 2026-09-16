@@ -828,6 +828,10 @@ CREATE TABLE conversation_state (
     pending_question TEXT NULL,
     state_json JSON NULL,
     version_no INT UNSIGNED NOT NULL DEFAULT 1,
+    active_task_id BIGINT UNSIGNED NULL,
+    active_task_stack_json JSON NULL,
+    context_summary_id BIGINT UNSIGNED NULL,
+    routing_state_json JSON NULL,
     updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (conversation_id),
     CONSTRAINT fk_conversation_state_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -2634,6 +2638,318 @@ ALTER TABLE carts ADD COLUMN order_batch_id BIGINT UNSIGNED NULL, ADD KEY idx_ca
     ADD CONSTRAINT fk_carts_order_batch FOREIGN KEY (order_batch_id) REFERENCES order_batches(id) ON DELETE SET NULL;
 ALTER TABLE orders ADD COLUMN order_batch_id BIGINT UNSIGNED NULL, ADD KEY idx_orders_order_batch (order_batch_id),
     ADD CONSTRAINT fk_orders_order_batch FOREIGN KEY (order_batch_id) REFERENCES order_batches(id) ON DELETE SET NULL;
+
+-- =====================================================================
+-- 19. AI SELF-LEARNING ARCHITECTURE & CONTINUOUS REFINEMENT
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS conversation_ai_events (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    turn_index INT UNSIGNED NOT NULL DEFAULT 1,
+    sequence_no INT UNSIGNED NOT NULL DEFAULT 1,
+    inbound_message_id BIGINT UNSIGNED NULL,
+    assistant_message_id BIGINT UNSIGNED NULL,
+    request_id VARCHAR(100) NULL,
+    event_type VARCHAR(60) NOT NULL,
+    state_version_before INT UNSIGNED NOT NULL DEFAULT 1,
+    state_version_after INT UNSIGNED NOT NULL DEFAULT 1,
+    sanitized_payload_json JSON NULL,
+    prompt_version VARCHAR(40) NULL,
+    tool_schema_version VARCHAR(40) NULL,
+    model_version VARCHAR(120) NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ai_events_public_id (public_id),
+    KEY idx_ai_events_conv_turn (conversation_id, turn_index),
+    KEY idx_ai_events_type (event_type),
+    CONSTRAINT fk_ai_events_conv FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS conversation_tasks (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    task_type VARCHAR(60) NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
+    parent_task_id BIGINT UNSIGNED NULL,
+    next_required_action VARCHAR(80) NULL,
+    expected_entity_type VARCHAR(60) NULL,
+    candidate_entities_json JSON NULL,
+    last_question TEXT NULL,
+    clarification_attempts INT UNSIGNED NOT NULL DEFAULT 0,
+    source_turn INT UNSIGNED NOT NULL DEFAULT 1,
+    resolved_turn INT UNSIGNED NULL,
+    context_json JSON NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_conversation_tasks_public_id (public_id),
+    KEY idx_conv_tasks_status (conversation_id, status),
+    CONSTRAINT fk_conv_tasks_conv FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    summary_version INT UNSIGNED NOT NULL DEFAULT 1,
+    customer_goal VARCHAR(255) NULL,
+    confirmed_constraints_json JSON NULL,
+    decisions_json JSON NULL,
+    corrections_json JSON NULL,
+    unresolved_json JSON NULL,
+    source_turn_start INT UNSIGNED NOT NULL DEFAULT 1,
+    source_turn_end INT UNSIGNED NOT NULL DEFAULT 1,
+    language_profile VARCHAR(30) NOT NULL DEFAULT 'arabizi',
+    summary_text TEXT NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_conv_summaries_public_id (public_id),
+    KEY idx_conv_summaries_conv (conversation_id, summary_version),
+    CONSTRAINT fk_conv_summaries_conv FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS customer_memory_items (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    customer_id BIGINT UNSIGNED NOT NULL,
+    kind VARCHAR(60) NOT NULL,
+    canonical_value VARCHAR(255) NOT NULL,
+    customer_expression VARCHAR(255) NOT NULL,
+    scope VARCHAR(30) NOT NULL DEFAULT 'ACCOUNT',
+    status VARCHAR(40) NOT NULL DEFAULT 'SUGGESTED',
+    confidence DECIMAL(4,3) NOT NULL DEFAULT 0.750,
+    evidence_count INT UNSIGNED NOT NULL DEFAULT 1,
+    source_conversation_id BIGINT UNSIGNED NULL,
+    source_turn_index INT UNSIGNED NULL,
+    confirmed_at TIMESTAMP(3) NULL,
+    expires_at TIMESTAMP(3) NULL,
+    supersedes_id BIGINT UNSIGNED NULL,
+    sensitivity VARCHAR(30) NOT NULL DEFAULT 'NORMAL',
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_customer_memory_public_id (public_id),
+    KEY idx_cust_memory_search (customer_id, kind, status),
+    CONSTRAINT fk_cust_memory_customer FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS ai_turn_outcomes (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    turn_index INT UNSIGNED NOT NULL,
+    inbound_message_id BIGINT UNSIGNED NULL,
+    assistant_message_id BIGINT UNSIGNED NULL,
+    request_id VARCHAR(100) NULL,
+    customer_reaction VARCHAR(60) NOT NULL DEFAULT 'ACCEPTED',
+    primary_root_cause VARCHAR(60) NULL,
+    contributing_causes_json JSON NULL,
+    safety_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    groundedness_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    intent_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    entity_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    context_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    clarification_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    language_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    tool_success_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    customer_effort_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    task_completion_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    sentiment_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    latency_quality_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    overall_score DECIMAL(4,3) NOT NULL DEFAULT 1.000,
+    hard_rejections_json JSON NULL,
+    observed_signals_json JSON NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ai_turn_outcomes_public_id (public_id),
+    KEY idx_ai_turn_outcomes_conv (conversation_id, turn_index),
+    KEY idx_ai_turn_outcomes_cause (primary_root_cause),
+    CONSTRAINT fk_ai_turn_outcomes_conv FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS ai_learning_cases (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    conversation_id BIGINT UNSIGNED NULL,
+    customer_id BIGINT UNSIGNED NULL,
+    turn_index INT UNSIGNED NOT NULL DEFAULT 1,
+    correlation_id VARCHAR(100) NULL,
+    inbound_message_id BIGINT UNSIGNED NULL,
+    assistant_message_id BIGINT UNSIGNED NULL,
+    sender_language VARCHAR(20) NOT NULL DEFAULT 'arabizi',
+    user_message TEXT NOT NULL,
+    actual_plan_json JSON NULL,
+    actual_tools_json JSON NULL,
+    actual_response TEXT NOT NULL,
+    tool_results_json JSON NULL,
+    customer_reaction VARCHAR(60) NULL,
+    root_cause VARCHAR(60) NOT NULL DEFAULT 'HUMAN_REVIEW_REQUIRED',
+    risk_tier VARCHAR(40) NOT NULL DEFAULT 'NORMAL',
+    priority_score INT NOT NULL DEFAULT 0,
+    gemini_proposed_plan_json JSON NULL,
+    gemini_proposed_reply TEXT NULL,
+    reviewer_corrected_intent VARCHAR(60) NULL,
+    reviewer_corrected_entities_json JSON NULL,
+    reviewer_corrected_tool VARCHAR(80) NULL,
+    reviewer_corrected_args_json JSON NULL,
+    reviewer_corrected_state_json JSON NULL,
+    reviewer_corrected_reply TEXT NULL,
+    target_intent VARCHAR(60) NULL,
+    target_reply_text TEXT NULL,
+    required_facts_json JSON NULL,
+    forbidden_facts_json JSON NULL,
+    review_status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+    reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_at TIMESTAMP(3) NULL,
+    review_notes VARCHAR(500) NULL,
+    dataset_memberships_json JSON NULL,
+    prompt_version VARCHAR(40) NULL,
+    model_version VARCHAR(120) NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ai_learning_cases_public_id (public_id),
+    KEY idx_ai_learning_cases_status_prio (review_status, priority_score),
+    KEY idx_ai_learning_cases_cause (root_cause)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS ai_case_sets (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    version VARCHAR(40) NOT NULL DEFAULT 'v1.0.0',
+    name VARCHAR(100) NOT NULL,
+    description VARCHAR(255) NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 0,
+    created_by BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ai_case_sets_public_id (public_id),
+    UNIQUE KEY uq_ai_case_sets_version (version)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS ai_case_set_members (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    case_set_id BIGINT UNSIGNED NOT NULL,
+    case_id BIGINT UNSIGNED NULL,
+    learning_case_id BIGINT UNSIGNED NULL,
+    stage VARCHAR(40) NOT NULL DEFAULT 'ANY',
+    intent VARCHAR(60) NOT NULL DEFAULT 'ANY',
+    language VARCHAR(20) NOT NULL DEFAULT 'arabizi',
+    example_input TEXT NULL,
+    example_reasoning TEXT NULL,
+    example_tool_calls_json JSON NULL,
+    example_response TEXT NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_case_set_members_lookup (case_set_id, stage, intent, language),
+    CONSTRAINT fk_case_set_members_set FOREIGN KEY (case_set_id) REFERENCES ai_case_sets(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS ai_prompt_registry (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    version VARCHAR(40) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    prompt_template MEDIUMTEXT NOT NULL,
+    content_sha256 CHAR(64) NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'DRAFT',
+    is_active TINYINT(1) NOT NULL DEFAULT 0,
+    eval_results_json JSON NULL,
+    created_by BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ai_prompt_registry_public_id (public_id),
+    UNIQUE KEY uq_ai_prompt_registry_version (version)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS ai_experiments (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    name VARCHAR(120) NOT NULL,
+    experiment_type VARCHAR(40) NOT NULL DEFAULT 'SHADOW',
+    stable_version VARCHAR(60) NOT NULL,
+    candidate_version VARCHAR(60) NOT NULL,
+    canary_percentage INT UNSIGNED NOT NULL DEFAULT 0,
+    status VARCHAR(30) NOT NULL DEFAULT 'RUNNING',
+    metrics_comparison_json JSON NULL,
+    started_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    ended_at TIMESTAMP(3) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ai_experiments_public_id (public_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS ai_experiment_assignments (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    experiment_id BIGINT UNSIGNED NOT NULL,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    cohort VARCHAR(30) NOT NULL,
+    assigned_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ai_experiment_conv (experiment_id, conversation_id),
+    CONSTRAINT fk_ai_exp_assign_conv FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ai_exp_assign_exp FOREIGN KEY (experiment_id) REFERENCES ai_experiments(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS catalog_alias_candidates (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    public_id CHAR(36) NOT NULL,
+    alias_term VARCHAR(120) NOT NULL,
+    target_type VARCHAR(30) NOT NULL DEFAULT 'PRODUCT',
+    target_id BIGINT UNSIGNED NOT NULL,
+    target_name VARCHAR(150) NOT NULL,
+    language VARCHAR(20) NOT NULL DEFAULT 'arabizi',
+    distinct_customer_count INT UNSIGNED NOT NULL DEFAULT 1,
+    customer_ids_json JSON NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'CANDIDATE',
+    reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_at TIMESTAMP(3) NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_catalog_alias_term (alias_term, target_type, target_id),
+    KEY idx_catalog_alias_status (status, distinct_customer_count)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS ai_routing_config (
+    id INT UNSIGNED NOT NULL DEFAULT 1,
+    routing_mode VARCHAR(40) NOT NULL DEFAULT 'STABLE_ONLY',
+    stable_provider VARCHAR(40) NOT NULL DEFAULT 'gemini',
+    candidate_provider VARCHAR(40) NOT NULL DEFAULT 'gemini',
+    canary_percentage INT UNSIGNED NOT NULL DEFAULT 0,
+    stable_model_endpoint VARCHAR(180) NULL,
+    candidate_model_endpoint VARCHAR(180) NULL,
+    last_rollback_reason VARCHAR(500) NULL,
+    updated_by BIGINT UNSIGNED NULL,
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id)
+) ENGINE=InnoDB;
+
+INSERT INTO ai_routing_config (id, routing_mode, stable_provider, candidate_provider, canary_percentage, updated_at)
+VALUES (1, 'STABLE_ONLY', 'gemini', 'gemini', 0, NOW())
+ON DUPLICATE KEY UPDATE id = id;
+
+CREATE TABLE IF NOT EXISTS conversation_mutation_receipts (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    idempotency_key VARCHAR(180) NOT NULL,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    action_name VARCHAR(80) NULL,
+    tool_name VARCHAR(80) NULL,
+    action_status VARCHAR(40) NOT NULL DEFAULT 'SUCCESS',
+    request_payload JSON NULL,
+    response_payload JSON NULL,
+    receipt_json JSON NULL,
+    created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_mutation_receipts_key (idempotency_key),
+    KEY idx_mutation_receipts_conv (conversation_id),
+    CONSTRAINT fk_mutation_receipts_conv FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
 
 SET FOREIGN_KEY_CHECKS = 1;
 

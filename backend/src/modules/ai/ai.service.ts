@@ -20,6 +20,7 @@ import { INTERACTIVE_NOT_FOUND_REPLY } from './interactive-not-found.js';
 import {
   detectSenderLanguage,
   toStoredLanguage,
+  isContextualConversationFollowUp,
   isResponseInSenderLanguage,
   getLanguageSafeFallback,
 } from './sender-language.js';
@@ -133,7 +134,7 @@ export class AIService {
       if (route.provider === 'smart_nlu') return route.result;
 
       const senderLanguage = detectSenderLanguage(messageText);
-      if (isResponseInSenderLanguage(senderLanguage, route.result.replyText)) return route.result;
+      if (isResponseInSenderLanguage(senderLanguage, route.result.replyText) || isContextualConversationFollowUp(messageText)) return route.result;
 
       return {
         ...route.result,

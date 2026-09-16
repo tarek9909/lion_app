@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
-import { execute, pool } from '../database/db.js';
+import { execute, pool, query } from '../database/db.js';
 import { customerMemoryService } from '../modules/ai/memory/customer-memory.service.js';
 import { conversationHarvesterService, RawConversationTurn } from '../modules/ai/dataset/conversation-harvester.service.js';
 import { getGeminiSystemPrompt } from '../modules/ai/prompts/gemini.system-prompt.js';
@@ -12,9 +12,9 @@ async function ensureTestCustomerAndConv(customerId: number, convId: number) {
   try {
     await execute(
       `INSERT INTO customers (id, public_id, whatsapp_number, display_name, status, created_at, updated_at)
-       VALUES (?, ?, '+96170123456', 'Test 77', 'ACTIVE', NOW(), NOW())
+       VALUES (?, ?, ?, 'Test customer', 'ACTIVE', NOW(), NOW())
        ON DUPLICATE KEY UPDATE status = 'ACTIVE'`,
-      [customerId, uuidv4()]
+      [customerId, uuidv4(), `+961799${String(customerId).padStart(6, '0').slice(-6)}`]
     );
     await execute(
       `INSERT INTO conversations (id, public_id, customer_id, channel, status, created_at, updated_at)
@@ -91,6 +91,16 @@ async function runAILearningTests() {
   assert(systemPrompt.includes('Learned customer memory & preferences:'), 'System prompt must include learned memory block');
   assert(systemPrompt.includes('halal'), 'System prompt must contain memory details');
   console.log('  ✅ Gemini system prompt accurately incorporates customer memory [PASS]');
+
+  const languageMemoryCustomerId = 9998;
+  await ensureTestCustomerAndConv(languageMemoryCustomerId, languageMemoryCustomerId);
+  await customerMemoryService.observeAndLearn(languageMemoryCustomerId, 'Yes', 'turn-language', { preferredLanguage: 'arabizi' });
+  const languageMemoryRow = await query<any[]>(
+    'SELECT preferred_language FROM customer_preferences WHERE customer_id = ? LIMIT 1',
+    [languageMemoryCustomerId],
+  );
+  assert(languageMemoryRow[0]?.preferred_language === 'arabizi', 'Short contextual replies persist the resolved conversation language');
+  console.log('  ✅ Conversation language is retained in durable customer memory [PASS]');
 
   // --------------------------------------------------------------------------
   // Test 3: Conversation Harvester Scoring Heuristics

@@ -23,20 +23,115 @@ export interface ProviderProcessOptions {
   modelEndpoint?: string;
 }
 
+import { query, execute } from '../../../database/db.js';
+
 export class ShadowCanaryRouter {
   private config: RoutingConfig = {
     ...resolveAIRoutingConfig(config.ai),
   };
 
-  configure(newConfig: Partial<RoutingConfig>): void {
+  /**
+   * Reconcile configuration from MySQL durable table (Finding K).
+   * Ensures shadow/canary deployments survive instance restarts.
+   */
+  async reconcileFromDatabase(): Promise<void> {
+    try {
+      const rows = await query<any[]>(
+        `SELECT routing_mode, stable_provider, candidate_provider, canary_percentage,
+                stable_model_endpoint, candidate_model_endpoint, last_rollback_reason
+         FROM ai_routing_config WHERE id = 1 LIMIT 1`
+      );
+      if (rows && rows.length > 0) {
+        const r = rows[0];
+        this.config = {
+          ...this.config,
+          routingMode: (r.routing_mode as RoutingMode) || this.config.routingMode,
+          stableProvider: (r.stable_provider as any) || this.config.stableProvider,
+          candidateProvider: (r.candidate_provider as any) || this.config.candidateProvider,
+          canaryPercentage: Number(r.canary_percentage ?? this.config.canaryPercentage),
+          stableModelEndpoint: r.stable_model_endpoint || this.config.stableModelEndpoint,
+          candidateModelEndpoint: r.candidate_model_endpoint || this.config.candidateModelEndpoint,
+        };
+        console.log(`[AI Router] Reconciled durable config from MySQL: mode=${this.config.routingMode}, canary=${this.config.canaryPercentage}%`);
+      }
+    } catch {
+      // If DB not ready yet, keep in-memory config
+    }
+  }
+
+  async configure(newConfig: Partial<RoutingConfig>): Promise<void> {
     this.config = { ...this.config, ...newConfig };
     console.log(
       `[AI Router] Configured mode: ${this.config.routingMode} (Canary: ${this.config.canaryPercentage}%, Stable: ${this.config.stableProvider}, Candidate: ${this.config.candidateProvider})`
     );
+
+    // Persist to MySQL ai_routing_config (Finding K)
+    try {
+      await execute(
+        `INSERT INTO ai_routing_config (
+          id, routing_mode, stable_provider, candidate_provider, canary_percentage,
+          stable_model_endpoint, candidate_model_endpoint, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          routing_mode = VALUES(routing_mode),
+          stable_provider = VALUES(stable_provider),
+          candidate_provider = VALUES(candidate_provider),
+          canary_percentage = VALUES(canary_percentage),
+          stable_model_endpoint = VALUES(stable_model_endpoint),
+          candidate_model_endpoint = VALUES(candidate_model_endpoint),
+          updated_at = NOW()`,
+        [
+          this.config.routingMode,
+          this.config.stableProvider,
+          this.config.candidateProvider,
+          this.config.canaryPercentage,
+          this.config.stableModelEndpoint || null,
+          this.config.candidateModelEndpoint || null,
+        ]
+      );
+    } catch (err: any) {
+      console.warn('[AI Router] Failed to persist routing config to DB:', err?.message || err);
+    }
   }
 
   getConfig(): Readonly<RoutingConfig> {
     return { ...this.config };
+  }
+
+  async setRouting(options: {
+    mode: 'STABLE_ONLY' | 'SHADOW' | 'CANARY' | 'CANDIDATE_ONLY' | 'LIVE';
+    canaryPercentage?: number;
+    candidateModelEndpoint?: string;
+    stableModelEndpoint?: string;
+    updatedBy?: string;
+  }): Promise<void> {
+    const routingMode = options.mode === 'LIVE' ? 'STABLE_ONLY' : options.mode;
+    await this.configure({
+      routingMode: routingMode as RoutingMode,
+      canaryPercentage: options.canaryPercentage ?? (routingMode === 'STABLE_ONLY' ? 0 : this.config.canaryPercentage),
+      candidateModelEndpoint: options.candidateModelEndpoint,
+      stableModelEndpoint: options.stableModelEndpoint,
+    });
+  }
+
+  getStatus(): {
+    mode: RoutingMode | string;
+    routingMode: RoutingMode;
+    canaryPercentage: number;
+    stableProvider: string;
+    candidateProvider: string;
+    candidateModelEndpoint?: string;
+    stableModelEndpoint?: string;
+  } {
+    return {
+      mode: this.config.routingMode,
+      routingMode: this.config.routingMode,
+      canaryPercentage: this.config.canaryPercentage,
+      stableProvider: this.config.stableProvider,
+      candidateProvider: this.config.candidateProvider,
+      candidateModelEndpoint: this.config.candidateModelEndpoint,
+      stableModelEndpoint: this.config.stableModelEndpoint,
+    };
   }
 
   hasCredentials(provider: 'smart_nlu' | 'gemini'): boolean {
@@ -54,11 +149,24 @@ export class ShadowCanaryRouter {
     return false;
   }
 
-  rollbackToStable(): void {
+  async rollbackToStable(reason: string = 'Automated safety rollback trigger'): Promise<void> {
     this.config.routingMode = 'STABLE_ONLY';
     this.config.canaryPercentage = 0;
-    console.warn('[AI Router] ROLLBACK TRIGGERED: Switched to STABLE_ONLY mode.');
+    console.warn(`[AI Router] ROLLBACK TRIGGERED: Switched to STABLE_ONLY mode. Reason: ${reason}`);
+
+    try {
+      await execute(
+        `UPDATE ai_routing_config
+         SET routing_mode = 'STABLE_ONLY',
+             canary_percentage = 0,
+             last_rollback_reason = ?,
+             updated_at = NOW()
+         WHERE id = 1`,
+        [reason]
+      );
+    } catch {}
   }
+
 
   /**
    * Determine if a customer falls into the canary bucket (0 to 100)

@@ -14,6 +14,7 @@ import {
 } from '../state/ai-state.types.js';
 import {
   invalidateCheckout,
+  isExplicitCartClearRequest,
   isExplicitConfirmation,
   isHistoricalOrQuestionConfirmation,
   isNegatedConfirmation,
@@ -494,6 +495,8 @@ export class AiToolsExecutor {
               variantName: validatedArgs.variant_name,
             },
           };
+          state.nextRequiredAction = 'CONFIRM_MERCHANT_SWITCH';
+          state.expectedEntity = targetOption.merchantName;
           transitionConversationStage(state, 'AWAITING_MERCHANT_SWITCH');
 
           return {
@@ -747,17 +750,7 @@ export class AiToolsExecutor {
           };
         }
         const msg = (userMessage || '').toLowerCase().trim();
-        const isExplicitClear =
-          msg === 'clear cart' ||
-          msg === 'empty cart' ||
-          msg === 'clear' ||
-          msg === 'empty' ||
-          msg === 'فضّي السلة' ||
-          msg === 'فضّي الكارت' ||
-          msg === 'مسح السلة' ||
-          msg === 'امسح السلة' ||
-          msg.includes('clear cart') ||
-          msg.includes('empty cart');
+        const isExplicitClear = isExplicitCartClearRequest(msg) || msg.includes('clear cart') || msg.includes('empty cart');
 
         if (userMessage && !isExplicitClear) {
           return {
@@ -782,6 +775,8 @@ export class AiToolsExecutor {
         invalidateCheckout(state);
         state.activeOrderSummary = null;
         state.pendingMerchantSwitch = null;
+        state.nextRequiredAction = null;
+        state.expectedEntity = null;
         transitionConversationStage(state, 'IDLE');
 
         return {
@@ -1149,6 +1144,8 @@ export class AiToolsExecutor {
 
         const pending = state.pendingMerchantSwitch;
         state.pendingMerchantSwitch = null;
+        state.nextRequiredAction = null;
+        state.expectedEntity = null;
 
         if (!options?.shadowMode) {
           const currentCart = await cartService.getOrCreateActiveCart(customerId);
@@ -1192,6 +1189,8 @@ export class AiToolsExecutor {
 
       case 'switch_merchant_reject': {
         state.pendingMerchantSwitch = null;
+        state.nextRequiredAction = null;
+        state.expectedEntity = null;
         transitionConversationStage(state, 'EDITING_CART');
         return {
           toolName,

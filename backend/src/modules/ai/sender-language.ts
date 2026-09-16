@@ -24,7 +24,7 @@ const LANGUAGE_PROFILES: LanguageProfile[] = [
       'bade', 'baddi', 'badde', 'baddak', 'baddik', 'zid', 'zidli', 'sawiya', 'sawiyon',
       'wehde', 'wahad', 'we7de', 'tnein', 'tlete', 'kifak', 'kifik', 'shou', 'chou',
       'shu', 'wein', 'wen', '3al', '3albet', '3andon', '3andak', '3ndak', '3ndk', '3tene',
-      'hal', 'shi', 'kaza', 'menu', 'menus', 'options', '7elo', 'akid', 'akeed',
+      'hal', 'shi', 'kaza', 'fadde', 'fade', 'ma7eyun', 'ma7eon', 'kullun', 'kullon', 'menu', 'menus', 'options', '7elo', 'akid', 'akeed',
       'ta2kid', 'tamam', 'kabbis', 'ma2liyeh', 'mosa3adeh', 'arkhas', 'a7san', 'la2ayt',
       'fini', 'bse3dak', 'tfaddal', 'merci', 'mar7aba', 'salam', 'ma', 'mesh', 'mish',
     ],
@@ -134,7 +134,7 @@ function profileScore(text: string, profile: LanguageProfile): number {
 
 function arabiziScore(text: string): number {
   const normalized = normalize(text);
-  const strongWords = /\b(?:bade|baddi|badde|baddak|baddik|zidli|sawiya|sawiyon|kifak|kifik|shou|shu|chou|wein|wen|3al|3albet|3andon|3andak|3ndak|3ndk|3tene|kaza|akid|akeed|ta2kid|ya3tik|ma2liyeh|mosa3adeh|a7san|arkhas|kabbis|mar7aba|tfaddal|bse3dak)\b/g;
+  const strongWords = /\b(?:bade|baddi|badde|baddak|baddik|zidli|sawiya|sawiyon|kifak|kifik|shou|shu|chou|wein|wen|3al|3albet|3andon|3andak|3ndak|3ndk|3tene|kaza|fadde|fade|ma7eyun|ma7eon|kullun|kullon|akid|akeed|ta2kid|ya3tik|ma2liyeh|mosa3adeh|a7san|arkhas|kabbis|mar7aba|tfaddal|bse3dak)\b/g;
   const encodedWords = /\b[a-z]*[2356789][a-z]+\b/g;
   const strongMatches = normalized.match(strongWords)?.length || 0;
   const encodedMatches = normalized.match(encodedWords)?.length || 0;
@@ -176,6 +176,30 @@ export function detectSenderLanguage(text: string): SenderLanguage {
   }
 
   return 'en';
+}
+
+/**
+ * Keeps a conversation in its established language when the customer sends a
+ * short contextual reply such as "yes", "view cart", "1", or "new cart".
+ * A longer message with clear language content is still allowed to switch it.
+ */
+export function isContextualConversationFollowUp(text: string): boolean {
+  const normalized = normalize(text).replace(/[!?.,]+/g, '').replace(/\s+/g, ' ');
+  const tokenCount = wordTokens(normalized).length;
+  return /^(?:yes|no|ok|okay|confirm|clear|empty|delete|keep|view cart|new cart|start over|1|2|3|4|5|no delete it|dont delete it)$/iu.test(normalized) || tokenCount <= 2;
+}
+
+export function resolveConversationLanguage(text: string, previousLanguage?: SenderLanguage | null): SenderLanguage {
+  const detected = detectSenderLanguage(text);
+  const previous = previousLanguage && previousLanguage !== 'other' ? previousLanguage : null;
+  if (!previous || detected === 'ar' || detected === 'ar_lb' || detected === 'arabizi' || detected === 'mixed') {
+    return detected;
+  }
+  if (detected === 'other' || isContextualConversationFollowUp(text)) {
+    return previous;
+  }
+
+  return detected;
 }
 
 /** Backward-compatible state value. Unknown/script-only languages are handled by Gemini as `other`. */

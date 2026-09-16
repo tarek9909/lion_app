@@ -193,7 +193,7 @@ export function createInitialState(customerId: number, language: SupportedLangua
     pendingOrderBatchId: null,
     historySummary: null,
     lastProcessedMessageId: null,
-    stateVersion: 1,
+    stateVersion: 0,
   };
 }
 
@@ -306,46 +306,106 @@ function normalizeLoadedState(parsed: any, customerId: number, conversationId: n
   return parsed as AIConversationState;
 }
 
-export async function saveConversationState(customerId: number, state: AIConversationState, conversationId?: number | null): Promise<void> {
-  try {
-    state.stateVersion = (state.stateVersion || 0) + 1;
-    const payload = {
-      ...state,
-      selectedAddressId: state.selectedAddress?.id ?? null,
-      selectedAddressLabel: state.selectedAddress?.label ?? null,
-      selectedMerchantId: state.selectedMerchant?.id ?? null,
-      selectedMerchantName: state.selectedMerchant?.name ?? null,
-      selectedMerchantBranchId: state.selectedMerchant?.branchId ?? null,
-    };
-    const targetConversationId = conversationId || state.conversationId || null;
-    if (targetConversationId) {
+export class StateVersionConflictError extends Error {
+  constructor(public conversationId: number, public expectedVersion: number) {
+    super(`State version conflict for conversation ${conversationId}: expected version ${expectedVersion}`);
+    this.name = 'StateVersionConflictError';
+  }
+}
+
+export async function saveConversationState(
+  customerId: number,
+  state: AIConversationState,
+  conversationId?: number | null,
+  options?: { expectedVersion?: number; enforceCas?: boolean }
+): Promise<void> {
+  const targetConversationId = conversationId || state.conversationId || null;
+  const previousVersion = options?.expectedVersion ?? state.stateVersion ?? 0;
+
+  const payload = {
+    ...state,
+    selectedAddressId: state.selectedAddress?.id ?? null,
+    selectedAddressLabel: state.selectedAddress?.label ?? null,
+    selectedMerchantId: state.selectedMerchant?.id ?? null,
+    selectedMerchantName: state.selectedMerchant?.name ?? null,
+    selectedMerchantBranchId: state.selectedMerchant?.branchId ?? null,
+  };
+
+  if (targetConversationId) {
+    const existing = await query<any[]>(
+      `SELECT version_no FROM conversation_state WHERE conversation_id = ? LIMIT 1`,
+      [targetConversationId]
+    );
+
+    if (existing.length === 0) {
+      // First state insertion
+      const newVersion = previousVersion > 0 ? previousVersion : 1;
+      state.stateVersion = newVersion;
+      payload.stateVersion = newVersion;
+
       await execute(
         `INSERT INTO conversation_state
           (conversation_id, current_state, last_presented_options, pending_question, state_json, version_no)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-          current_state = VALUES(current_state),
-          last_presented_options = VALUES(last_presented_options),
-          pending_question = VALUES(pending_question),
-          state_json = VALUES(state_json),
-          version_no = VALUES(version_no)`,
+         VALUES (?, ?, ?, ?, ?, ?)`,
         [
           targetConversationId,
           state.stage,
           JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
-          // Keep the relational projection lossless; state_json remains the
-          // canonical snapshot and can hold the full generated question.
           state.lastAssistantQuestion || null,
           JSON.stringify(payload),
-          state.stateVersion,
-        ],
+          newVersion,
+        ]
       );
+    } else {
+      const currentDbVersion = Number(existing[0].version_no || 1);
+      const shouldEnforceCas = options?.enforceCas ?? (options?.expectedVersion !== undefined);
+
+      if (shouldEnforceCas && currentDbVersion !== previousVersion) {
+        throw new StateVersionConflictError(targetConversationId, previousVersion);
+      }
+
+      const effectivePrevVersion = shouldEnforceCas ? previousVersion : currentDbVersion;
+      const newVersion = effectivePrevVersion + 1;
+      state.stateVersion = newVersion;
+      payload.stateVersion = newVersion;
+
+      const res: any = await execute(
+        `UPDATE conversation_state
+         SET current_state = ?,
+             last_presented_options = ?,
+             pending_question = ?,
+             state_json = ?,
+             version_no = ?
+         WHERE conversation_id = ? ${shouldEnforceCas ? 'AND version_no = ?' : ''}`,
+        shouldEnforceCas
+          ? [
+              state.stage,
+              JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
+              state.lastAssistantQuestion || null,
+              JSON.stringify(payload),
+              newVersion,
+              targetConversationId,
+              previousVersion,
+            ]
+          : [
+              state.stage,
+              JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
+              state.lastAssistantQuestion || null,
+              JSON.stringify(payload),
+              newVersion,
+              targetConversationId,
+            ]
+      );
+
+      if (shouldEnforceCas && res && res.affectedRows === 0) {
+        throw new StateVersionConflictError(targetConversationId, previousVersion);
+      }
     }
-    await redis.set(`ai:state:${targetConversationId || customerId}`, JSON.stringify(payload), 86400);
-  } catch (err) {
-    console.warn('[AI State] Error saving state to Redis:', err);
   }
+
+  await redis.set(`ai:state:${targetConversationId || customerId}`, JSON.stringify(payload), 86400);
 }
+
 
 export function transitionConversationStage(
   state: AIConversationState,

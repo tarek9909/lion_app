@@ -39,6 +39,14 @@ import {
   evaluateModel,
   promoteModel,
   rollbackModel,
+  getLearningCases,
+  reviewLearningCase,
+  listAllCustomerMemoryItems,
+  confirmCustomerMemoryItem,
+  deleteCustomerMemoryItem,
+  listPromptVersions,
+  activatePromptVersion,
+  getLearningDashboardMetrics,
 } from './modules/dashboard/ai-learning.controller.js';
 import { customerService } from './modules/customers/customer.service.js';
 import { login } from './modules/auth/auth.controller.js';
@@ -199,6 +207,14 @@ app.get(['/api/ai-learning/models', '/api/v1/ai-learning/models'], authenticate,
 app.post(['/api/ai-learning/models/:publicId/evaluate', '/api/v1/ai-learning/models/:publicId/evaluate'], authenticate, aiLearningRoles, evaluateModel);
 app.post(['/api/ai-learning/models/:publicId/promote', '/api/v1/ai-learning/models/:publicId/promote'], authenticate, aiLearningRoles, promoteModel);
 app.post(['/api/ai-learning/models/:publicId/rollback', '/api/v1/ai-learning/models/:publicId/rollback'], authenticate, aiLearningRoles, rollbackModel);
+app.get(['/api/ai-learning/cases', '/api/v1/ai-learning/cases'], authenticate, aiLearningRoles, getLearningCases);
+app.post(['/api/ai-learning/cases/:publicId/review', '/api/v1/ai-learning/cases/:publicId/review'], authenticate, aiLearningRoles, reviewLearningCase);
+app.get(['/api/ai-learning/memory-items', '/api/v1/ai-learning/memory-items'], authenticate, aiLearningRoles, listAllCustomerMemoryItems);
+app.post(['/api/ai-learning/memory-items/:publicId/confirm', '/api/v1/ai-learning/memory-items/:publicId/confirm'], authenticate, aiLearningRoles, confirmCustomerMemoryItem);
+app.delete(['/api/ai-learning/memory-items/:publicId', '/api/v1/ai-learning/memory-items/:publicId'], authenticate, aiLearningRoles, deleteCustomerMemoryItem);
+app.get(['/api/ai-learning/prompts', '/api/v1/ai-learning/prompts'], authenticate, aiLearningRoles, listPromptVersions);
+app.post(['/api/ai-learning/prompts/:version/activate', '/api/v1/ai-learning/prompts/:version/activate'], authenticate, aiLearningRoles, activatePromptVersion);
+app.get(['/api/ai-learning/dashboard/metrics', '/api/v1/ai-learning/dashboard/metrics'], authenticate, aiLearningRoles, getLearningDashboardMetrics);
 
 // Demo Reset Endpoint
 app.post(['/api/demo/reset', '/api/v1/demo/reset'], authenticate, requireRoles('SUPERADMIN', 'ADMIN', 'OPERATOR'), async (req, res) => {

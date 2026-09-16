@@ -38,7 +38,8 @@
     "test:shadow-immutability": "tsx src/scripts/test-shadow-immutability.ts",
     "test:evaluator-safety": "tsx src/scripts/test-evaluator-safety.ts",
     "test:ai-learning": "tsx src/scripts/test-ai-learning.ts",
-    "test:ai-learning-e2e": "tsx src/scripts/test-ai-continuous-learning-e2e.ts"
+    "test:ai-learning-e2e": "tsx src/scripts/test-ai-continuous-learning-e2e.ts",
+    "test:ai-architecture": "tsx src/scripts/test-ai-self-learning-architecture.ts"
   },
   "dependencies": {
     "ajv": "^8.20.0",

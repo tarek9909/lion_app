@@ -3,6 +3,7 @@ import { app } from './app.js';
 import { config, validateStartupConfig } from './config/env.js';
 import { testDbConnection } from './database/db.js';
 import { ensureAILearningTables } from './database/ensure-ai-learning-tables.js';
+import { shadowCanaryRouter } from './modules/ai/routing/shadow-canary.service.js';
 import { initWebSocketServer } from './services/websocket.js';
 import { cartService } from './modules/carts/cart.service.js';
 import { whatsappWorker } from './modules/conversations/whatsapp.worker.js';
@@ -25,6 +26,7 @@ async function startServer() {
   }
   console.log(`✅ Connected to MySQL database "${config.db.database}" on ${config.db.host}:${config.db.port}`);
   await ensureAILearningTables();
+  await shadowCanaryRouter.reconcileFromDatabase();
   cartService.startAbandonmentScheduler();
   whatsappWorker.start();
   harvestingWorker.start();

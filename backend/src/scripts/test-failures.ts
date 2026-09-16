@@ -254,7 +254,9 @@ export async function runFailureAndRetryTests(): Promise<boolean> {
 
 if (process.argv[1]?.endsWith('test-failures.ts') || process.argv[1]?.endsWith('test-failures.js')) {
   runFailureAndRetryTests()
-    .then((ok) => process.exit(ok ? 0 : 1))
+    .then((ok) => {
+      setTimeout(() => process.exit(ok ? 0 : 1), 100);
+    })
     .catch((e) => {
       console.error(e);
       process.exit(1);

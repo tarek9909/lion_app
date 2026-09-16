@@ -61,10 +61,31 @@ export async function runConversationTestPack(): Promise<boolean> {
     const noOrder = await aiService.processCustomerMessage(PHONE, 'Where is my order?', 'text', { conversationId: first.conversationId });
     assert(noOrder.intent === 'ORDER_STATUS' && /do not have an active order/i.test(noOrder.replyText) && !/catalog/i.test(noOrder.replyText), `order tracking reports no active order without catalog miss: ${noOrder.replyText}`);
 
+    const contextCart = await cartService.getOrCreateActiveCart(customer!.id);
+    await cartService.clearCart(contextCart.id);
+    await cartService.addItem(contextCart.id, Number(products[0].id), 1);
+    const arabiziContextState = createInitialState(customer!.id, 'arabizi', first.conversationId);
+    arabiziContextState.stage = 'EDITING_CART';
+    await saveConversationState(customer!.id, arabiziContextState, first.conversationId);
+    const directClear = await aiService.processCustomerMessage(PHONE, 'Fadde l cart', 'text', { conversationId: first.conversationId });
+    const clearedCart = await cartService.getActiveCartReadOnly(customer!.id);
+    assert(directClear.intent === 'CLEAR_CART' && /^Tamam, faddayt l cart/i.test(directClear.replyText) && clearedCart?.items.length === 0, 'Arabizi clear-cart request clears the cart and replies in Arabizi');
+
+    await cartService.addItem(contextCart.id, Number(products[0].id), 1);
+    await saveConversationState(customer!.id, arabiziContextState, first.conversationId);
+    const newCart = await aiService.processCustomerMessage(PHONE, 'New cart', 'text', { conversationId: first.conversationId });
+    const confirmedClear = await aiService.processCustomerMessage(PHONE, 'Yes', 'text', { conversationId: first.conversationId });
+    const clearedAfterYes = await cartService.getActiveCartReadOnly(customer!.id);
+    assert(
+      /^Fi 3andak aghrad bel cart/i.test(newCart.replyText) && /^Tamam, faddayt l cart/i.test(confirmedClear.replyText) && clearedAfterYes?.items.length === 0,
+      `new-cart confirmation retains Arabizi context and accepts yes (prompt=${newCart.replyText}; confirmation=${confirmedClear.replyText}; remaining=${clearedAfterYes?.items.length})`,
+    );
+
     const productState = createInitialState(customer!.id, 'arabizi', first.conversationId); productState.pendingProductCategory = 'beverage';
     const drink = await aiToolsExecutor.executeTool('resolve_product_name', { product_name: 'Kinza', category: 'beverage' }, customer!.id, productState, 0);
     assert(drink.success && drink.result.requested_name === 'Kinza' && drink.result.matched_product == null, 'drink resolution preserves request without Coke substitution');
 
+    await cartService.addItem(contextCart.id, Number(products[0].id), 1);
     const burgerRows = await query<any[]>(`SELECT mp.id FROM merchant_products mp JOIN merchant_branches mb ON mb.id=mp.merchant_branch_id JOIN merchants m ON m.id=mb.merchant_id WHERE m.name = 'Burger Spot' LIMIT 1`);
     const batchState = createInitialState(customer!.id, 'en', first.conversationId);
     const batchPlan = await aiToolsExecutor.executeTool('create_multi_order_plan', { items: [{ merchant_product_id: Number(burgerRows[0].id), quantity: 1 }] }, customer!.id, batchState, 0, undefined, 'order from both places');

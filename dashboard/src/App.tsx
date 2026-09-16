@@ -8,6 +8,7 @@ import { AnalyticsView } from './components/AnalyticsView';
 import { ManagementAiView } from './components/ManagementAiView';
 import { WhatsAppInbox } from './components/WhatsAppInbox';
 import { PeopleView } from './components/PeopleView';
+import { AILearningWorkbench } from './components/AILearningWorkbench';
 import { wsClient } from './services/websocket';
 import { api } from './services/api';
 import { Menu } from 'lucide-react';
@@ -151,6 +152,7 @@ export const App: React.FC = () => {
           {activeTab === 'contacts' && <PeopleView />}
           {activeTab === 'analytics' && <AnalyticsView />}
           {activeTab === 'management' && <ManagementAiView />}
+          {activeTab === 'ai-learning' && <AILearningWorkbench />}
         </main>
       </div>
 

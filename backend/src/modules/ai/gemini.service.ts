@@ -28,15 +28,27 @@ import { calculateGeminiCost } from './telemetry/gemini-pricing.js';
 import { randomUUID } from 'node:crypto';
 import { dispatchCustomerError, getCustomerResponseCategory, resultHasNoCatalogMatches } from './interactive-not-found.js';
 import {
+  getPendingCartClearDecision,
+  isExplicitCartClearRequest,
+  isNewCartRequest,
+} from './checkout-safety.js';
+import {
   detectSenderLanguage,
   getLanguageSafeFallback,
   isGenericAssistanceReply,
   isResponseInSenderLanguage,
+  resolveConversationLanguage,
   SenderLanguage,
 } from './sender-language.js';
 import { localizeReplyText } from './response-localizer.js';
 import { sanitizeCustomerOutput } from './customer-output.js';
 import { customerMemoryService } from './memory/customer-memory.service.js';
+import { query, execute } from '../../database/db.js';
+import { contextCompilerService } from './context/context-compiler.service.js';
+import { taskStackService } from './context/task-stack.service.js';
+import { groundedResponseVerifier } from './verification/grounded-response-verifier.js';
+import { outcomeObserverService } from './learning/outcome-observer.service.js';
+import { StateVersionConflictError } from './state/ai-state.types.js';
 
 export function detectLanguage(text: string): string {
   return detectSenderLanguage(text);
@@ -138,6 +150,36 @@ export class GeminiService {
     return /^(hi|hello|hey|salam|marhaba|bonjour)$/iu.test(text.trim());
   }
 
+  private cartClearedReply(language: SenderLanguage): string {
+    if (language === 'arabizi') return 'Tamam, faddayt l cart. Shou baddak tetlob halla2?';
+    if (language === 'ar' || language === 'ar_lb') return 'تمام، فرّغت السلة. شو بدك تطلب هلّق؟';
+    if (language === 'mixed') return 'تمام، I cleared your cart. What would you like to order now?';
+    return 'Your cart has been cleared. What would you like to order now?';
+  }
+
+  private cartClearConfirmationReply(language: SenderLanguage, merchantName?: string | null): string {
+    const merchant = merchantName ? ` ${merchantName}` : '';
+    if (language === 'arabizi') return `Fi 3andak aghrad bel cart${merchant}. Baddak faddiha w tballesh cart jdid? Rodd “eh” la faddiha aw “la” la khalliha.`;
+    if (language === 'ar' || language === 'ar_lb') return `عندك أغراض بالسلة${merchant}. بدك فرّغها وتبلّش سلة جديدة؟ ردّ «نعم» لفرّغها أو «لا» لتخلّيها.`;
+    if (language === 'mixed') return `عندك أغراض بالسلة${merchant}. Do you want me to clear it and start a new cart? Reply yes or no.`;
+    return `You still have items in your cart${merchant}. Would you like me to clear it and start a new cart? Reply yes or no.`;
+  }
+
+  private cartKeptReply(language: SenderLanguage): string {
+    if (language === 'arabizi') return 'Tamam, khallayt l cart metel ma hiyye. Shou baddak ta3mel fiya?';
+    if (language === 'ar' || language === 'ar_lb') return 'تمام، خلّيت السلة متل ما هي. شو بدك تعمل فيها؟';
+    if (language === 'mixed') return 'تمام، I kept your cart as it is. What would you like to do next?';
+    return 'Okay, I kept your cart as it is. What would you like to do next?';
+  }
+
+  private merchantSwitchReply(language: SenderLanguage, merchantName: string, productName?: string): string {
+    const item = productName ? ` ${productName}` : ' the selected item';
+    if (language === 'arabizi') return `Tamam, faddayt l cart l adeeme w zedt${item} men ${merchantName}. Baddak tshouf l cart aw nkammel checkout?`;
+    if (language === 'ar' || language === 'ar_lb') return `تمام، فرّغت السلة القديمة وضفت${item} من ${merchantName}. بدك تشوف السلة أو نكمّل للدفع؟`;
+    if (language === 'mixed') return `تمام، I cleared the old cart and added${item} from ${merchantName}. Would you like to view the cart or continue to checkout?`;
+    return `Done. I cleared the old cart and added${item} from ${merchantName}. Would you like to view the cart or continue to checkout?`;
+  }
+
   private errorFacts(result: unknown): { itemName?: string; addressLabel?: string; orderNumber?: string; verifiedOptions?: string[] } {
     const value = result && typeof result === 'object' ? result as Record<string, any> : {};
     const alternatives = Array.isArray(value.verified_alternatives)
@@ -190,16 +232,59 @@ export class GeminiService {
     }
   }
 
+  private async safeSaveState(customerId: number, state: AIConversationState, conversationId: number | null): Promise<void> {
+    try {
+      await saveConversationState(customerId, state, conversationId, { enforceCas: true });
+    } catch (err) {
+      if (err instanceof StateVersionConflictError) {
+        console.warn(`[Gemini Service] CAS conflict on state version ${err.expectedVersion}, reloading state to retry save...`);
+        const latest = await loadConversationState(customerId, conversationId);
+        latest.lastAssistantQuestion = state.lastAssistantQuestion;
+        latest.preferredLanguage = state.preferredLanguage;
+        latest.turnIndex = (latest.turnIndex || 0) + 1;
+        latest.historySummary = state.historySummary;
+        latest.cartSummary = state.cartSummary;
+        latest.stage = state.stage;
+        latest.nextRequiredAction = state.nextRequiredAction;
+        latest.expectedEntity = state.expectedEntity;
+        await saveConversationState(customerId, latest, conversationId, { enforceCas: true });
+      } else {
+        throw err;
+      }
+    }
+  }
+
   private async executeTool(
     toolName: string,
     args: Record<string, any>,
     customerId: number,
     state: AIConversationState,
     mutationCountThisTurn: number,
-    options?: { shadowMode?: boolean },
+    options?: { shadowMode?: boolean; conversationId?: number; inboundMessageId?: number },
     userMessage?: string
   ): Promise<ToolExecutionResult> {
-    return aiToolsExecutor.executeTool(
+    const conversationId = options?.conversationId || state.conversationId;
+    const inboundMessageId = options?.inboundMessageId;
+    const idempotencyKey = (inboundMessageId && isMutatingTool(toolName))
+      ? `msg_${inboundMessageId}_${toolName}`
+      : null;
+
+    if (conversationId && idempotencyKey && !options?.shadowMode) {
+      try {
+        const rows = await query<any[]>(
+          `SELECT response_payload FROM conversation_mutation_receipts WHERE conversation_id = ? AND idempotency_key = ? LIMIT 1`,
+          [conversationId, idempotencyKey]
+        );
+        if (rows && rows.length > 0) {
+          const cached = JSON.parse(rows[0].response_payload);
+          return cached;
+        }
+      } catch (err: any) {
+        console.warn('[Gemini Service] Idempotency receipt check warning:', err.message);
+      }
+    }
+
+    const execution = await aiToolsExecutor.executeTool(
       toolName,
       args,
       customerId,
@@ -208,6 +293,27 @@ export class GeminiService {
       options,
       userMessage
     );
+
+    if (conversationId && idempotencyKey && execution.success && !options?.shadowMode) {
+      try {
+        await execute(
+          `INSERT INTO conversation_mutation_receipts (conversation_id, idempotency_key, action_name, request_payload, response_payload, created_at)
+           VALUES (?, ?, ?, ?, ?, NOW())
+           ON DUPLICATE KEY UPDATE response_payload = VALUES(response_payload)`,
+          [
+            conversationId,
+            idempotencyKey,
+            toolName,
+            JSON.stringify(args || {}),
+            JSON.stringify(execution),
+          ]
+        );
+      } catch (err: any) {
+        console.warn('[Gemini Service] Receipt storage warning:', err.message);
+      }
+    }
+
+    return execution;
   }
 
   /**
@@ -266,6 +372,7 @@ export class GeminiService {
     const requestId = options?.requestId || randomUUID();
 
     const state = customer.id > 0 ? await loadConversationState(customer.id, conversationId) : createInitialState(-1, 'arabizi', conversationId);
+    const previousTurnCount = state.turnIndex || 0;
     state.conversationId = conversationId;
     state.turnIndex = (state.turnIndex || 0) + 1;
     const stateBeforeSnapshot = sanitizeStateSnapshot(state);
@@ -276,7 +383,7 @@ export class GeminiService {
       const reply =
         'I received your message, but it was empty. Please send what you would like to order, a voice note, a clear product photo, or a location pin.';
       if (!options?.shadowMode && customer.id > 0) {
-        await saveConversationState(customer.id, state, conversationId);
+        await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
       return {
@@ -286,13 +393,21 @@ export class GeminiService {
       };
     }
 
-    // Detect the language from this sender turn. A stored preference is only
-    // a fallback for history; it must never override the latest message.
-    const responseLanguage: SenderLanguage = detectSenderLanguage(text);
+    // Keep the established conversation language for short contextual replies
+    // such as "yes", "view cart", and option numbers. A substantive new
+    // message can still intentionally switch the conversation language.
+    let rememberedLanguage: SenderLanguage | null = null;
+    if (customer.id > 0 && previousTurnCount === 0) {
+      try {
+        rememberedLanguage = (await customerMemoryService.getPreferences(customer.id)).preferredLanguage as SenderLanguage || null;
+      } catch {}
+    }
+    const responseLanguage: SenderLanguage = resolveConversationLanguage(text, rememberedLanguage || state.preferredLanguage);
     if (customer.id > 0) {
       state.preferredLanguage = responseLanguage;
+      state.lastProcessedMessageId = options?.inboundMessageId || state.lastProcessedMessageId || null;
       if (!options?.shadowMode) {
-        customerMemoryService.observeAndLearn(customer.id, text, requestId).catch(() => {});
+        customerMemoryService.observeAndLearn(customer.id, text, requestId, { preferredLanguage: responseLanguage }).catch(() => {});
       }
     }
 
@@ -303,7 +418,7 @@ export class GeminiService {
       const reply = dispatchCustomerError({ errorCode: 'UNINTELLIGIBLE_MESSAGE', language: responseLanguage })!.text;
       state.lastAssistantQuestion = reply;
       if (!options?.shadowMode && customer.id > 0) {
-        await saveConversationState(customer.id, state, conversationId);
+        await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
       return { replyText: reply, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
@@ -313,7 +428,7 @@ export class GeminiService {
     if (this.isGreeting(text) && state.nextRequiredAction && state.lastAssistantQuestion) {
       const reply = sanitizeCustomerOutput(`${responseLanguage === 'arabizi' ? 'Ahlan. ' : responseLanguage === 'fr' ? 'Bonjour. ' : 'Hello. '}${state.lastAssistantQuestion}`);
       if (!options?.shadowMode && customer.id > 0) {
-        await saveConversationState(customer.id, state, conversationId);
+        await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
       return { replyText: reply, intent: 'CONTINUE_PENDING_TASK' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
@@ -334,13 +449,22 @@ export class GeminiService {
         : dispatchCustomerError({ errorCode: execution.errorCode, errorMessage: execution.error, result: execution.result, language: responseLanguage, facts: this.errorFacts(execution.result) })?.text || getLanguageSafeFallback(responseLanguage);
       state.lastAssistantQuestion = reply;
       if (!options?.shadowMode && customer.id > 0) {
-        await saveConversationState(customer.id, state, conversationId);
+        await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
       return { replyText: reply, intent: 'CAPTURE_DELIVERY_ADDRESS' as ValidatedIntent, confidence: 0.99, cartSummary: execution.cartSummary, shadowExecution: !!options?.shadowMode };
     }
 
     if (/(?:where is (?:my )?order|order status|wein (?:el )?order|track(?:ing)? (?:my )?order|suivi.*commande)/iu.test(text)) {
+      if (conversationId && state.stage !== 'IDLE' && !options?.shadowMode) {
+        taskStackService.pushTask(conversationId, {
+          taskType: 'ORDER_STATUS',
+          nextRequiredAction: null,
+          lastQuestion: text,
+          sourceTurn: state.turnIndex || 1,
+          context: { suspendedStage: state.stage, suspendedQuestion: state.lastAssistantQuestion },
+        }).catch((err) => console.warn('[Gemini Service] Task stack push warning:', err));
+      }
       const execution = await this.executeTool('get_order_status', {}, customer.id, state, 0, options, text);
       const result: any = execution.result || {};
       const reply = execution.success
@@ -351,10 +475,89 @@ export class GeminiService {
             : `📦 Your order #${result.order_number} from ${result.merchant_name || 'Chicken House'} is currently ${result.status}.`)
         : dispatchCustomerError({ errorCode: execution.errorCode, errorMessage: execution.error, result, language: responseLanguage, facts: this.errorFacts(result) })?.text || getLanguageSafeFallback(responseLanguage);
       if (!options?.shadowMode && customer.id > 0) {
-        await saveConversationState(customer.id, state, conversationId);
+        await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
       return { replyText: reply, intent: 'ORDER_STATUS' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
+    }
+
+    const currentActiveCart = await cartService.getActiveCartReadOnly(customer.id);
+    const hasCartItems = Boolean(currentActiveCart?.items?.length);
+    const directClear = isExplicitCartClearRequest(text) || /\b(?:delete|remove)\s+(?:it|them|all|the cart)\b/iu.test(text);
+
+    // An explicit clear request is deterministic and must not wait for a
+    // model call. It also takes precedence over an old merchant-switch offer.
+    if (hasCartItems && directClear) {
+      const execution = await this.executeTool('clear_cart', { confirmation: true }, customer.id, state, 0, options, text);
+      const reply = execution.success ? this.cartClearedReply(responseLanguage) : getLanguageSafeFallback(responseLanguage);
+      state.lastAssistantQuestion = reply;
+      if (!options?.shadowMode && customer.id > 0) {
+        await this.safeSaveState(customer.id, state, conversationId);
+        await this.appendHistory(customer.id, conversationId, text, reply);
+      }
+      return { replyText: reply, intent: 'CLEAR_CART' as ValidatedIntent, confidence: 0.99, cartSummary: null, shadowExecution: !!options?.shadowMode };
+    }
+
+    // "New cart" is intentionally a confirmation flow when items exist. The
+    // next short reply is resolved locally against this exact question.
+    if (hasCartItems && isNewCartRequest(text)) {
+      state.pendingMerchantSwitch = null;
+      state.nextRequiredAction = 'CONFIRM_CART_CLEAR';
+      state.expectedEntity = 'cart_clear_confirmation';
+      state.lastAssistantQuestion = this.cartClearConfirmationReply(responseLanguage, currentActiveCart?.merchant_name);
+      if (state.stage === 'AWAITING_MERCHANT_SWITCH') state.stage = 'IDLE';
+      if (!options?.shadowMode && customer.id > 0) {
+        await this.safeSaveState(customer.id, state, conversationId);
+        await this.appendHistory(customer.id, conversationId, text, state.lastAssistantQuestion);
+      }
+      return { replyText: state.lastAssistantQuestion, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
+    }
+
+    if (state.nextRequiredAction === 'CONFIRM_CART_CLEAR') {
+      const decision = getPendingCartClearDecision(text);
+      let reply: string;
+      if (decision === 'CONFIRM') {
+        const execution = await this.executeTool('clear_cart', { confirmation: true }, customer.id, state, 0, options, 'clear cart');
+        reply = execution.success ? this.cartClearedReply(responseLanguage) : getLanguageSafeFallback(responseLanguage);
+      } else if (decision === 'DECLINE') {
+        state.nextRequiredAction = null;
+        state.expectedEntity = null;
+        state.stage = 'EDITING_CART';
+        reply = this.cartKeptReply(responseLanguage);
+      } else {
+        reply = this.cartClearConfirmationReply(responseLanguage, currentActiveCart?.merchant_name);
+      }
+      state.lastAssistantQuestion = reply;
+      if (!options?.shadowMode && customer.id > 0) {
+        await this.safeSaveState(customer.id, state, conversationId);
+        await this.appendHistory(customer.id, conversationId, text, reply);
+      }
+      return { replyText: reply, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
+    }
+
+    // A pending merchant switch owns simple approvals/rejections. Resolve it
+    // before Gemini sees a bare "yes" or "no", so the answer cannot lose its
+    // referent or get mistaken for a new order confirmation.
+    if (state.pendingMerchantSwitch) {
+      const approved = aiToolsExecutor.isExplicitMerchantSwitchApproval(text, true);
+      const rejected = getPendingCartClearDecision(text) === 'DECLINE';
+      if (approved || rejected) {
+        const pending = state.pendingMerchantSwitch;
+        const execution = approved
+          ? await this.executeTool('switch_merchant_confirm', { confirm_switch: true, confirmation_phrase: text }, customer.id, state, 0, options, text)
+          : await this.executeTool('switch_merchant_reject', { reject_switch: true }, customer.id, state, 0, options, text);
+        const reply = execution.success
+          ? approved
+            ? this.merchantSwitchReply(responseLanguage, pending.newMerchantName, pending.pendingProduct?.productNameQuery)
+            : this.cartKeptReply(responseLanguage)
+          : getLanguageSafeFallback(responseLanguage);
+        state.lastAssistantQuestion = reply;
+        if (!options?.shadowMode && customer.id > 0) {
+          await this.safeSaveState(customer.id, state, conversationId);
+          await this.appendHistory(customer.id, conversationId, text, reply);
+        }
+        return { replyText: reply, intent: approved ? 'ADD_TO_CART' as ValidatedIntent : 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, cartSummary: execution.cartSummary, shadowExecution: !!options?.shadowMode };
+      }
     }
 
     // 1. Resolve pending clarification if customer answered it directly
@@ -396,7 +599,7 @@ export class GeminiService {
               responseLanguage,
             );
 
-            await saveConversationState(customer.id, state, conversationId);
+            await this.safeSaveState(customer.id, state, conversationId);
             await this.appendHistory(customer.id, conversationId, text, reply);
 
             return {
@@ -454,16 +657,31 @@ export class GeminiService {
 
     const tools = getAuthoritativeGeminiToolDeclarations();
     let customerPreferencesText = '';
+    let extraContextBlock: string | undefined;
     if (customer.id > 0) {
       try {
         const prefs = await customerMemoryService.getPreferences(customer.id);
         customerPreferencesText = customerMemoryService.formatPreferencesForPrompt(prefs);
-      } catch {}
+        const compiled = await contextCompilerService.compileContext({
+          customerId: customer.id,
+          conversationId: conversationId || null,
+          state,
+          inboundText: text,
+          detectedLanguage: responseLanguage,
+          promptVersion: PROMPT_VERSION,
+          toolSchemaVersion: '2.0.0',
+          behaviorContractVersion: BEHAVIOR_CONTRACT_VERSION,
+        });
+        extraContextBlock = compiled.promptContextBlock;
+      } catch (err: any) {
+        console.warn('[Gemini Service] Context compilation warning:', err.message);
+      }
     }
     const systemInstruction = getGeminiSystemPrompt(
       sanitizeStateSnapshot(state),
       responseLanguage,
-      customerPreferencesText
+      customerPreferencesText,
+      extraContextBlock
     );
 
     let primaryIntent: CanonicalIntent = 'GREETING';
@@ -716,6 +934,22 @@ export class GeminiService {
     const detectedLang = detectLanguage(text);
     const turnSuccess = !recordedToolResults.some((r) => r.result && r.result.success === false);
 
+    const facts = this.errorFacts(recordedToolResults[0]?.result);
+    const verification = groundedResponseVerifier.verify({
+      responseText: finalText,
+      targetLanguage: responseLanguage,
+      verifiedFacts: {
+        productNames: facts.itemName ? [facts.itemName] : facts.verifiedOptions,
+        addressLabels: facts.addressLabel ? [facts.addressLabel] : undefined,
+        orderNumbers: facts.orderNumber ? [facts.orderNumber] : undefined,
+      },
+      toolExecutionSuccess: turnSuccess,
+      toolName: recordedToolCalls[recordedToolCalls.length - 1]?.name,
+    });
+    if (!verification.passed && verification.sanitizedText) {
+      finalText = verification.sanitizedText;
+    }
+
     const toolCallsCombined = recordedToolCalls.map((tc, idx) => ({
       name: tc.name,
       args: tc.args,
@@ -727,7 +961,7 @@ export class GeminiService {
     // by the slowest side effect, not their sum.
     const stateAndHistoryPromise = !options?.shadowMode && customer.id > 0
       ? Promise.all([
-          saveConversationState(customer.id, state, conversationId),
+          this.safeSaveState(customer.id, state, conversationId),
           this.appendHistory(customer.id, conversationId, text, finalText),
         ])
       : Promise.resolve();
@@ -769,6 +1003,49 @@ export class GeminiService {
       telemetryPromise,
       activeCartPromise,
     ]);
+
+    if (conversationId && !options?.shadowMode) {
+      const isUnsafe = recordedToolCalls.some((tc) => tc.name === 'confirm_and_create_order' && state.stage !== 'AWAITING_CONFIRMATION');
+      const isClaimedSuccessAfterFailure = !turnSuccess && /(?:confirmed|created|order placed|تم تأكيد)/i.test(finalText);
+
+      outcomeObserverService.recordOutcome({
+        conversationId,
+        turnIndex: state.turnIndex || 1,
+        inboundMessageId: options?.inboundMessageId || null,
+        requestId,
+        customerReaction: 'ACCEPTED',
+        toolSuccess: turnSuccess,
+        isUnsafeMutationAttempted: isUnsafe,
+        isClaimedSuccessAfterFailure,
+        latencyMs: Date.now() - startTime,
+        observedSignals: {
+          primaryIntent,
+          toolCalls: recordedToolCalls.map((tc) => tc.name),
+          verificationPassed: verification.passed,
+          violations: verification.violations,
+        },
+      }).catch((err) => console.warn('[Gemini Service] Error recording outcome:', err.message));
+
+      execute(
+        `INSERT INTO conversation_ai_events (public_id, conversation_id, turn_index, inbound_message_id, event_type, sanitized_payload_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          randomUUID(),
+          conversationId,
+          state.turnIndex || 1,
+          options?.inboundMessageId || null,
+          'TURN_COMPLETED',
+          JSON.stringify({
+            rawInput: text,
+            replyText: finalText,
+            intent: primaryIntent,
+            toolCalls: recordedToolCalls,
+            latencyMs: Date.now() - startTime,
+            tokens: { prompt: promptTokensTotal, candidates: candidatesTokensTotal },
+          }),
+        ]
+      ).catch((err: any) => console.warn('[Gemini Service] Error recording ai event:', err.message));
+    }
 
     return {
       replyText: finalText,

@@ -280,7 +280,7 @@ export class ModelRegistryService {
     }
 
     // Configure router to run candidate in shadow mode with specific endpoint
-    shadowCanaryRouter.configure({
+    await shadowCanaryRouter.configure({
       routingMode: 'SHADOW',
       candidateProvider: 'gemini',
       candidateModelEndpoint: model.modelName,
@@ -341,7 +341,7 @@ export class ModelRegistryService {
       throw new Error('Candidate model must have a registered endpoint name.');
     }
 
-    shadowCanaryRouter.configure({
+    await shadowCanaryRouter.configure({
       routingMode: 'CANARY',
       canaryPercentage: percentage,
       candidateProvider: 'gemini',
@@ -382,12 +382,8 @@ export class ModelRegistryService {
    */
   async emergencyRollback(publicId: string, reason: string, operatorId: number): Promise<boolean> {
     // 1. Immediately reset router to STABLE_ONLY
-    shadowCanaryRouter.configure({
-      routingMode: 'STABLE_ONLY',
-      canaryPercentage: 0,
-      stableProvider: 'gemini',
-      candidateModelEndpoint: undefined,
-    });
+    await shadowCanaryRouter.rollbackToStable(reason);
+
 
     const model = await this.getModel(publicId);
     if (model) {

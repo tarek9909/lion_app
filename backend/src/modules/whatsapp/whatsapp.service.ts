@@ -75,10 +75,19 @@ export class WhatsAppService {
       const res = await this.fetchFn(`https://graph.facebook.com/${config.whatsapp.graphApiVersion}/${config.whatsapp.phoneNumberId}`, {
         headers: { Authorization: `Bearer ${config.whatsapp.accessToken}` },
       });
-      const data = await res.json();
-      return { ok: res.ok, status: res.status, data };
+      const data: any = await res.json();
+      if (!res.ok) {
+        const msg = data?.error?.message || `HTTP ${res.status}`;
+        return {
+          ok: false,
+          status: res.status,
+          data,
+          error: `${msg} (EXTERNAL VERIFICATION PENDING)`,
+        };
+      }
+      return { ok: true, status: res.status, data };
     } catch (e: any) {
-      return { ok: false, error: e.message };
+      return { ok: false, error: `${e.message} (EXTERNAL VERIFICATION PENDING)` };
     }
   }
 

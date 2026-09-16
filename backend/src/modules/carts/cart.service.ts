@@ -466,6 +466,13 @@ export class CartService {
       WHERE c.status = 'ACTIVE'
         AND c.updated_at <= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 30 MINUTE)
         AND EXISTS (SELECT 1 FROM cart_items ci WHERE ci.cart_id = c.id)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM conversations cv
+          WHERE cv.customer_id = c.customer_id
+            AND cv.status = 'OPEN'
+            AND cv.last_message_at > DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 30 MINUTE)
+        )
       ORDER BY c.updated_at ASC
       LIMIT 100
     `);

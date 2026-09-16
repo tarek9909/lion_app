@@ -345,6 +345,8 @@ export const api = {
     return data.data;
   },
 
+
+
   // Management AI (G-056)
   async askManagementAi(question: string): Promise<any> {
     const res = await authFetch(`${API_BASE}/management-ai/ask`, {
@@ -368,5 +370,89 @@ export const api = {
       method: 'POST',
     });
     return res.json();
+  },
+
+  // AI Learning Workbench (Section 17)
+  async getLearningCases(status?: string, rootCause?: string): Promise<any[]> {
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    if (rootCause) params.append('rootCause', rootCause);
+    const res = await authFetch(`${API_BASE}/ai-learning/cases?${params.toString()}`);
+    const data = await res.json();
+    return data.data || [];
+  },
+
+  async reviewLearningCase(publicId: string, review: any): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ai-learning/cases/${publicId}/review`, {
+      method: 'POST',
+      body: JSON.stringify(review),
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Case review failed');
+    return data.data;
+  },
+
+  async getCustomerMemoryItems(customerId?: number): Promise<any[]> {
+    const params = customerId ? `?customerId=${customerId}` : '';
+    const res = await authFetch(`${API_BASE}/ai-learning/memory-items${params}`);
+    const data = await res.json();
+    return data.data || [];
+  },
+
+  async confirmCustomerMemoryItem(publicId: string): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ai-learning/memory-items/${publicId}/confirm`, {
+      method: 'POST',
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Confirm memory failed');
+    return data.data;
+  },
+
+  async deleteCustomerMemoryItem(publicId: string): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ai-learning/memory-items/${publicId}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Delete memory failed');
+    return data.data;
+  },
+
+  async getPromptVersions(): Promise<any[]> {
+    const res = await authFetch(`${API_BASE}/ai-learning/prompts`);
+    const data = await res.json();
+    return data.data || [];
+  },
+
+  async activatePromptVersion(version: string): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ai-learning/prompts/${version}/activate`, {
+      method: 'POST',
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Activate prompt failed');
+    return data.data;
+  },
+
+  async getLearningDashboardMetrics(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ai-learning/dashboard/metrics`);
+    const data = await res.json();
+    return data.data || {};
+  },
+
+  async exportLearningDataset(options?: { name?: string; minQualityScore?: number; format?: string }): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ai-learning/export`, {
+      method: 'POST',
+      body: JSON.stringify(options || {}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error?.message || 'Dataset export failed');
+    return data.data;
+  },
+
+  async triggerHarvest(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ai-learning/harvest`, {
+      method: 'POST',
+    });
+    const data = await res.json();
+    return data.data;
   },
 };

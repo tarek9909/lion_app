@@ -230,6 +230,36 @@ export class CustomerMemoryService {
           JSON.stringify(cleaned.memoryItems),
         ]
       );
+
+      // Also persist structured memory items into canonical customer_memory_items table
+      for (const item of cleaned.memoryItems || []) {
+        try {
+          const isConfirmed = item.confirmationStatus === 'CUSTOMER_CONFIRMED' || item.confirmationStatus === 'OPERATOR_VERIFIED';
+          await execute(
+            `INSERT INTO customer_memory_items (
+              public_id, customer_id, kind, canonical_value, customer_expression,
+              scope, status, confidence, evidence_count, confirmed_at, expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'ACCOUNT', ?, ?, 1, ?, ?, NOW(), NOW())
+            ON DUPLICATE KEY UPDATE
+              status = VALUES(status),
+              confidence = VALUES(confidence),
+              confirmed_at = VALUES(confirmed_at),
+              expires_at = VALUES(expires_at),
+              updated_at = NOW()`,
+            [
+              item.id || uuidv4(),
+              customerId,
+              item.type,
+              item.item,
+              item.item,
+              isConfirmed ? 'CUSTOMER_CONFIRMED' : 'UNCONFIRMED_SUGGESTION',
+              item.confidence || 0.75,
+              isConfirmed ? new Date() : null,
+              item.expiresAt ? new Date(item.expiresAt) : null,
+            ]
+          );
+        } catch {}
+      }
     } catch (dbErr) {
       console.error(`[CustomerMemory] DB write failed for customer ${customerId}:`, (dbErr as Error).message);
       throw dbErr;
@@ -237,6 +267,7 @@ export class CustomerMemoryService {
 
     return cleaned;
   }
+
 
   /**
    * Update AI training consent for a customer with audit timestamps.
@@ -313,18 +344,20 @@ export class CustomerMemoryService {
       throw new Error(`Failed to erase customer preferences in database: ${(dbErr as Error).message}`);
     }
 
-    // 3. Delete from training curation queue (P0 & P1 privacy requirement)
+    // 3. Delete from training curation queue and customer_memory_items (P0 & P1 privacy requirement)
     let deletedTurnsCount = 0;
     try {
+      await execute(`DELETE FROM customer_memory_items WHERE customer_id = ?`, [customerId]);
       const res: any = await execute(
         `DELETE FROM training_curation_queue WHERE customer_id = ?`,
         [customerId]
       );
       deletedTurnsCount = res?.affectedRows || 0;
     } catch (dbErr) {
-      console.error(`[CustomerMemory] Queue deletion failed for customer ${customerId}:`, (dbErr as Error).message);
-      throw new Error(`Failed to delete customer queue rows: ${(dbErr as Error).message}`);
+      console.error(`[CustomerMemory] Queue/Items deletion failed for customer ${customerId}:`, (dbErr as Error).message);
+      throw new Error(`Failed to delete customer memory rows: ${(dbErr as Error).message}`);
     }
+
 
     // 4. Log audit event
     try {
@@ -368,6 +401,12 @@ export class CustomerMemoryService {
     // Default expiration for unconfirmed delivery instructions: 30 days
     const expiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
+    const isExplicitPermanent = /(?:always|remember this|dyman|dayman|daymen|3ala toul|على طول|دائماً|تذكر|remember)/iu.test(lower);
+    const status: 'CUSTOMER_CONFIRMED' | 'UNCONFIRMED_SUGGESTION' = isExplicitPermanent
+      ? 'CUSTOMER_CONFIRMED'
+      : 'UNCONFIRMED_SUGGESTION';
+    const confidence = isExplicitPermanent ? 0.98 : 0.75;
+
     // English exclusions: no onions, without pickles, hold the mayo
     const engExclusionRegex = /(?:no|without|hold the|exclude)\s+([a-z]+)/gi;
     let match: RegExpExecArray | null;
@@ -390,16 +429,18 @@ export class CustomerMemoryService {
       };
       if (engMap[item]) {
         const canonical = engMap[item];
-        excludedIngredients.push(canonical);
+        if (!excludedIngredients.includes(canonical)) {
+          excludedIngredients.push(canonical);
+        }
         memoryItems.push({
           id: uuidv4(),
           item: canonical,
           type: 'exclusion',
-          confidence: 0.75,
-          confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+          confidence,
+          confirmationStatus: status,
           sourceTurn,
           createdAt: now,
-          expiresAt: null,
+          expiresAt: isExplicitPermanent ? null : expiryDate,
         });
       }
     }
@@ -425,16 +466,18 @@ export class CustomerMemoryService {
       };
       if (mapped[item]) {
         const canonical = mapped[item];
-        excludedIngredients.push(canonical);
+        if (!excludedIngredients.includes(canonical)) {
+          excludedIngredients.push(canonical);
+        }
         memoryItems.push({
           id: uuidv4(),
           item: canonical,
           type: 'exclusion',
-          confidence: 0.75,
-          confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+          confidence,
+          confirmationStatus: status,
           sourceTurn,
           createdAt: now,
-          expiresAt: null,
+          expiresAt: isExplicitPermanent ? null : expiryDate,
         });
       }
     }
@@ -457,114 +500,116 @@ export class CustomerMemoryService {
       };
       if (arabicMap[item]) {
         const canonical = arabicMap[item];
-        excludedIngredients.push(canonical);
+        if (!excludedIngredients.includes(canonical)) {
+          excludedIngredients.push(canonical);
+        }
         memoryItems.push({
           id: uuidv4(),
           item: canonical,
           type: 'exclusion',
-          confidence: 0.75,
-          confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+          confidence,
+          confirmationStatus: status,
           sourceTurn,
           createdAt: now,
-          expiresAt: null,
+          expiresAt: isExplicitPermanent ? null : expiryDate,
         });
       }
     }
 
     // Dietary preferences
     if (/(?:vegetarian|veggie|نباتي)/iu.test(text)) {
-      dietaryPreferences.push('vegetarian');
+      if (!dietaryPreferences.includes('vegetarian')) dietaryPreferences.push('vegetarian');
       memoryItems.push({
         id: uuidv4(),
         item: 'vegetarian',
         type: 'dietary',
-        confidence: 0.85,
-        confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+        confidence: isExplicitPermanent ? 0.98 : 0.85,
+        confirmationStatus: status,
         sourceTurn,
         createdAt: now,
-        expiresAt: null,
+        expiresAt: isExplicitPermanent ? null : expiryDate,
       });
     }
     if (/(?:vegan|خضري)/iu.test(text)) {
-      dietaryPreferences.push('vegan');
+      if (!dietaryPreferences.includes('vegan')) dietaryPreferences.push('vegan');
       memoryItems.push({
         id: uuidv4(),
         item: 'vegan',
         type: 'dietary',
-        confidence: 0.85,
-        confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+        confidence: isExplicitPermanent ? 0.98 : 0.85,
+        confirmationStatus: status,
         sourceTurn,
         createdAt: now,
-        expiresAt: null,
+        expiresAt: isExplicitPermanent ? null : expiryDate,
       });
     }
     if (/(?:halal|حلال)/iu.test(text)) {
-      dietaryPreferences.push('halal');
+      if (!dietaryPreferences.includes('halal')) dietaryPreferences.push('halal');
       memoryItems.push({
         id: uuidv4(),
         item: 'halal',
         type: 'dietary',
-        confidence: 0.90,
-        confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+        confidence: isExplicitPermanent ? 0.98 : 0.90,
+        confirmationStatus: status,
         sourceTurn,
         createdAt: now,
-        expiresAt: null,
+        expiresAt: isExplicitPermanent ? null : expiryDate,
       });
     }
     if (/(?:gluten[\s-]?free|خالي من الغلوتين)/iu.test(text)) {
-      dietaryPreferences.push('gluten_free');
+      if (!dietaryPreferences.includes('gluten_free')) dietaryPreferences.push('gluten_free');
       memoryItems.push({
         id: uuidv4(),
         item: 'gluten_free',
         type: 'dietary',
-        confidence: 0.85,
-        confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+        confidence: isExplicitPermanent ? 0.98 : 0.85,
+        confirmationStatus: status,
         sourceTurn,
         createdAt: now,
-        expiresAt: null,
+        expiresAt: isExplicitPermanent ? null : expiryDate,
       });
     }
     if (/(?:diabetic|sugar[\s-]?free|خالي من السكر)/iu.test(text)) {
-      dietaryPreferences.push('sugar_free');
+      if (!dietaryPreferences.includes('sugar_free')) dietaryPreferences.push('sugar_free');
       memoryItems.push({
         id: uuidv4(),
         item: 'sugar_free',
         type: 'dietary',
-        confidence: 0.85,
-        confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+        confidence: isExplicitPermanent ? 0.98 : 0.85,
+        confirmationStatus: status,
         sourceTurn,
         createdAt: now,
-        expiresAt: null,
+        expiresAt: isExplicitPermanent ? null : expiryDate,
       });
     }
 
     // Delivery cues & instructions
     if (/(?:don't ring (?:the )?doorbell|do not ring|ma trn|ma tren el jaras|ما ترن الجرس)/iu.test(text)) {
       const instr = 'Do not ring doorbell (call upon arrival)';
-      specialInstructions.push(instr);
+      if (!specialInstructions.includes(instr)) specialInstructions.push(instr);
       memoryItems.push({
         id: uuidv4(),
         item: instr,
         type: 'instruction',
-        confidence: 0.80,
-        confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+        confidence: isExplicitPermanent ? 0.98 : 0.80,
+        confirmationStatus: status,
         sourceTurn,
         createdAt: now,
-        expiresAt: expiryDate,
+        expiresAt: isExplicitPermanent ? null : expiryDate,
       });
     }
     if (/(?:call when you arrive|call me when outside|de2le|de2li bas tousal|اتصل بس توصل)/iu.test(text)) {
       const instr = 'Call customer upon arrival';
-      specialInstructions.push(instr);
+      if (!specialInstructions.includes(instr)) specialInstructions.push(instr);
       memoryItems.push({
         id: uuidv4(),
         item: instr,
         type: 'instruction',
-        confidence: 0.80,
-        confirmationStatus: 'UNCONFIRMED_SUGGESTION',
+        confidence: isExplicitPermanent ? 0.98 : 0.80,
+        confirmationStatus: status,
         sourceTurn,
         createdAt: now,
-        expiresAt: expiryDate,
+        expiresAt: isExplicitPermanent ? null : expiryDate,
       });
     }
 
@@ -580,7 +625,8 @@ export class CustomerMemoryService {
       excludedIngredients.length === 0 &&
       dietaryPreferences.length === 0 &&
       deliveryLandmarks.length === 0 &&
-      specialInstructions.length === 0
+      specialInstructions.length === 0 &&
+      memoryItems.length === 0
     ) {
       return null;
     }
@@ -597,12 +643,31 @@ export class CustomerMemoryService {
   /**
    * Observe inbound chat and automatically extract candidate memory asynchronously.
    */
-  async observeAndLearn(customerId: number, text: string, turnId?: string): Promise<void> {
+  async observeAndLearn(
+    customerId: number,
+    text: string,
+    turnId?: string,
+    options?: { preferredLanguage?: string },
+  ): Promise<void> {
     if (!customerId || customerId <= 0 || !text) return;
     try {
       const detected = this.extractPreferencesFromText(text, turnId);
-      if (detected) {
-        await this.savePreferences(customerId, detected);
+      if (detected || options?.preferredLanguage) {
+        const isConfirmed = detected?.memoryItems?.some(
+          (m) => m.confirmationStatus === 'CUSTOMER_CONFIRMED'
+        );
+        await this.savePreferences(customerId, {
+          ...(isConfirmed
+            ? {
+                excludedIngredients: detected?.excludedIngredients,
+                dietaryPreferences: detected?.dietaryPreferences,
+                deliveryLandmarks: detected?.deliveryLandmarks,
+                specialInstructions: detected?.specialInstructions,
+              }
+            : {}),
+          memoryItems: detected?.memoryItems,
+          ...(options?.preferredLanguage ? { preferredLanguage: options.preferredLanguage } : {}),
+        });
       }
     } catch (err) {
       console.warn('[CustomerMemory] Error in observeAndLearn:', (err as Error).message);
@@ -620,22 +685,43 @@ export class CustomerMemoryService {
     const confirmedLines: string[] = [];
     const suggestionLines: string[] = [];
 
-    // Confirmed items or explicitly saved preferences
-    if (cleaned.dietaryPreferences && cleaned.dietaryPreferences.length > 0) {
-      confirmedLines.push(`- Dietary: ${cleaned.dietaryPreferences.join(', ')}`);
+    // Strictly require that items in confirmedLines have confirmationStatus === 'CUSTOMER_CONFIRMED' or 'OPERATOR_VERIFIED'
+    const confirmedItems = (cleaned.memoryItems || []).filter(
+      (m) => m.confirmationStatus === 'CUSTOMER_CONFIRMED' || m.confirmationStatus === 'OPERATOR_VERIFIED'
+    );
+    const confirmedExclusions = Array.from(new Set([
+      ...(cleaned.excludedIngredients || []),
+      ...confirmedItems.filter((m) => m.type === 'exclusion').map((m) => m.item),
+    ]));
+    const confirmedDietary = Array.from(new Set([
+      ...(cleaned.dietaryPreferences || []),
+      ...confirmedItems.filter((m) => m.type === 'dietary').map((m) => m.item),
+    ]));
+    const confirmedLandmarks = Array.from(new Set([
+      ...(cleaned.deliveryLandmarks || []),
+      ...confirmedItems.filter((m) => m.type === 'landmark').map((m) => m.item),
+    ]));
+    const confirmedInstructions = Array.from(new Set([
+      ...(cleaned.specialInstructions || []),
+      ...confirmedItems.filter((m) => m.type === 'instruction').map((m) => m.item),
+    ]));
+
+    if (confirmedDietary.length > 0) {
+      confirmedLines.push(`- Dietary: ${confirmedDietary.join(', ')}`);
     }
-    if (cleaned.excludedIngredients && cleaned.excludedIngredients.length > 0) {
-      confirmedLines.push(`- Always avoid (Excluded ingredients): ${cleaned.excludedIngredients.join(', ')}`);
+    if (confirmedExclusions.length > 0) {
+      confirmedLines.push(`- Always avoid (Excluded ingredients): ${confirmedExclusions.join(', ')}`);
     }
     if (cleaned.favoriteCuisines && cleaned.favoriteCuisines.length > 0) {
       confirmedLines.push(`- Favorite cuisines: ${cleaned.favoriteCuisines.join(', ')}`);
     }
-    if (cleaned.deliveryLandmarks && cleaned.deliveryLandmarks.length > 0) {
-      confirmedLines.push(`- Saved delivery landmarks: ${cleaned.deliveryLandmarks.join(', ')}`);
+    if (confirmedLandmarks.length > 0) {
+      confirmedLines.push(`- Saved delivery landmarks: ${confirmedLandmarks.join(', ')}`);
     }
-    if (cleaned.specialInstructions && cleaned.specialInstructions.length > 0) {
-      confirmedLines.push(`- Customer delivery instructions: ${cleaned.specialInstructions.join(', ')}`);
+    if (confirmedInstructions.length > 0) {
+      confirmedLines.push(`- Customer delivery instructions: ${confirmedInstructions.join(', ')}`);
     }
+
 
     // Inspect structured memory items for any unconfirmed suggestions
     const unconfirmed = (cleaned.memoryItems || []).filter(
@@ -730,6 +816,45 @@ export class CustomerMemoryService {
       ...prefs,
       memoryItems: activeItems,
     };
+  }
+
+  async getCustomerMemoryItems(customerId: number): Promise<Array<{
+    id: string;
+    extracted_value: string;
+    confirmation_status: string;
+    kind: string;
+    confidence: number;
+  }>> {
+    try {
+      const rows = await query<any[]>(
+        `SELECT public_id as id, canonical_value as extracted_value, status as confirmation_status, kind, confidence
+         FROM customer_memory_items
+         WHERE customer_id = ?`,
+        [customerId]
+      );
+      if (rows && rows.length > 0) {
+        return rows.map((r) => ({
+          id: String(r.id),
+          extracted_value: String(r.extracted_value),
+          confirmation_status: String(r.confirmation_status),
+          kind: String(r.kind),
+          confidence: Number(r.confidence),
+        }));
+      }
+    } catch {}
+
+    const prefs = await this.getPreferences(customerId);
+    return (prefs.memoryItems || []).map((m) => ({
+      id: m.id,
+      extracted_value: m.item,
+      confirmation_status: m.confirmationStatus,
+      kind: m.type,
+      confidence: m.confidence,
+    }));
+  }
+
+  async eraseMemory(customerId: number, performedBy?: number): Promise<boolean> {
+    return this.optOutAndEraseMemory(customerId, performedBy);
   }
 
   private createEmptyPreferences(customerId: number): CustomerMemoryPreferences {

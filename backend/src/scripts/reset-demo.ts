@@ -1,6 +1,7 @@
 import { pool } from '../database/db.js';
 import { redis } from '../database/redis.js';
 import { seedDemoData } from './seed-demo.js';
+import { ensureAILearningTables } from '../database/ensure-ai-learning-tables.js';
 
 export async function resetDemo() {
   console.log('[Demo Reset] Resetting Lion Delivery demo state...');
@@ -174,7 +175,8 @@ export async function resetDemo() {
       console.warn('[Demo Reset] Redis flush warning:', redisErr);
     }
 
-    // 8. Re-apply seeds
+    // 8. Re-apply seeds and ensure tables
+    await ensureAILearningTables();
     await seedDemoData();
 
     // 9. Post-reset Baseline Invariant Assertions - Exact Counts (G-048, G-055)

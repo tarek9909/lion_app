@@ -808,6 +808,10 @@ export function exportGeminiFineTuningJsonl(
 
   const trainRecords = records.filter((r) => r.split === 'train');
   const valRecords = records.filter((r) => r.split === 'val');
+  const otherRecords = records.filter((r) => r.split !== 'train' && r.split !== 'val');
+  if (trainRecords.length === 0 && valRecords.length === 0 && otherRecords.length > 0) {
+    trainRecords.push(...otherRecords);
+  }
 
   const formatAndValidateLine = (r: DatasetTurnRecord): string => {
     // Faithful pairing of user turn with approved model response
@@ -832,10 +836,20 @@ export function exportGeminiFineTuningJsonl(
 
   const trainPath = path.join(dir, 'gemini_train.jsonl');
   const valPath = path.join(dir, 'gemini_val.jsonl');
+  const versionedTrainPath = path.join(dir, `gemini_train_${datasetVersion}.jsonl`);
+  const versionedValPath = path.join(dir, `gemini_val_${datasetVersion}.jsonl`);
   const manifestPath = path.join(dir, `dataset_manifest_${datasetVersion}.json`);
 
-  fs.writeFileSync(trainPath, trainLines.join('\n'), 'utf8');
-  fs.writeFileSync(valPath, valLines.join('\n'), 'utf8');
+  const trainContent = trainLines.join('\n');
+  const valContent = valLines.join('\n');
+
+  fs.writeFileSync(trainPath, trainContent, 'utf8');
+  fs.writeFileSync(valPath, valContent, 'utf8');
+  fs.writeFileSync(versionedTrainPath, trainContent, 'utf8');
+  fs.writeFileSync(versionedValPath, valContent, 'utf8');
+
+  const trainSha256 = createHash('sha256').update(trainContent).digest('hex');
+  const valSha256 = createHash('sha256').update(valContent).digest('hex');
 
   // Versioned dataset manifest
   const manifest = {
@@ -844,6 +858,8 @@ export function exportGeminiFineTuningJsonl(
     totalRecords: records.length,
     trainCount: trainRecords.length,
     valCount: valRecords.length,
+    trainSha256,
+    valSha256,
     provenanceBreakdown: records.reduce((acc, r) => {
       acc[r.provenance] = (acc[r.provenance] || 0) + 1;
       return acc;
@@ -857,11 +873,12 @@ export function exportGeminiFineTuningJsonl(
   return {
     trainCount: trainRecords.length,
     valCount: valRecords.length,
-    trainPath,
-    valPath,
+    trainPath: versionedTrainPath,
+    valPath: versionedValPath,
     manifestPath,
     version: datasetVersion,
   };
+
 }
 
 if (process.argv[1] && process.argv[1].endsWith('dataset-builder.ts')) {

@@ -102,6 +102,38 @@ export const redis = {
     }
   },
 
+  async setNx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    if (redisClient && isConnected) {
+      try {
+        const res = await redisClient.set(key, value, 'EX', ttlSeconds, 'NX');
+        return res === 'OK';
+      } catch {
+        // fallback
+      }
+    }
+    const entry = memoryFallback.get(key);
+    if (!entry || (entry.expiresAt && entry.expiresAt <= Date.now())) {
+      memoryFallback.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+      return true;
+    }
+    return false;
+  },
+
+  async eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<any> {
+    if (redisClient && isConnected) {
+      try {
+        return await (redisClient as any).eval(script, numKeys, ...args);
+      } catch {
+        // fallback
+      }
+    }
+    return null;
+  },
+
+  getClient(): Redis | null {
+    return redisClient;
+  },
+
   isOnline(): boolean {
     return isConnected && redisClient !== null;
   },
@@ -118,3 +150,4 @@ export const redis = {
     return false;
   }
 };
+

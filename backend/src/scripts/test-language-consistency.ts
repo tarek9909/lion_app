@@ -3,7 +3,13 @@ import {
   getLanguageSafeFallback,
   isGenericAssistanceReply,
   isResponseInSenderLanguage,
+  resolveConversationLanguage,
 } from '../modules/ai/sender-language.js';
+import {
+  getPendingCartClearDecision,
+  isExplicitCartClearRequest,
+  isNewCartRequest,
+} from '../modules/ai/checkout-safety.js';
 import { localizeReplyText } from '../modules/ai/response-localizer.js';
 import { getGeminiSystemPrompt } from '../modules/ai/prompts/gemini.system-prompt.js';
 import { INTERACTIVE_NOT_FOUND_REPLY } from '../modules/ai/interactive-not-found.js';
@@ -50,6 +56,17 @@ export function runLanguageConsistencyTests(): void {
   assert(getLanguageSafeFallback('en').startsWith('I did not understand'), 'English fallback explicitly acknowledges uncertainty');
   assert(getLanguageSafeFallback('arabizi').startsWith('Ma fhemet'), 'Arabizi fallback explicitly acknowledges uncertainty');
   assert(isGenericAssistanceReply('I can help with your order. What would you like to search for, add, or check?'), 'generic assistance reply is detected');
+  assert(detectSenderLanguage('Fadde l cart') === 'arabizi', 'Arabizi clear-cart phrase is detected as arabizi');
+  assert(detectSenderLanguage('Ma7eyun kullun') === 'arabizi', 'Arabizi delete-all phrase is detected as arabizi');
+  assert(resolveConversationLanguage('Yes', 'arabizi') === 'arabizi', 'short approval preserves the established Arabizi conversation language');
+  assert(resolveConversationLanguage('View cart', 'ar') === 'ar', 'short cart command preserves the established Arabic conversation language');
+  assert(resolveConversationLanguage('I want pizza please', 'arabizi') === 'en', 'a substantive English request can switch the conversation language');
+  assert(isExplicitCartClearRequest('Fadde l cart'), 'Arabizi clear-cart request is recognized');
+  assert(isExplicitCartClearRequest('Ma7eyun kullun'), 'Arabizi delete-all request is recognized');
+  assert(isNewCartRequest('New cart'), 'new-cart request requires contextual confirmation');
+  assert(getPendingCartClearDecision('Yes') === 'CONFIRM', 'yes confirms a pending cart clear');
+  assert(getPendingCartClearDecision('No delete it') === 'CONFIRM', 'delete directive confirms a pending cart clear');
+  assert(getPendingCartClearDecision('No') === 'DECLINE', 'no keeps a pending cart intact');
 
   for (const language of ['ar', 'arabizi', 'fr'] as const) {
     const clarification = localizeReplyText(CLARIFICATION_REPLY, language);
@@ -61,7 +78,7 @@ export function runLanguageConsistencyTests(): void {
   const prompt = getGeminiSystemPrompt(undefined, 'fr');
   assert(prompt.includes('Language for this turn is French'), 'Gemini prompt receives the current sender language');
   assert(prompt.includes('French receives French'), 'Gemini prompt mandates French output');
-  assert(prompt.includes('latest customer language and script'), 'Gemini prompt forbids language drift');
+  assert(prompt.includes('established customer language and script'), 'Gemini prompt preserves conversation language context');
 
   console.log('Language consistency tests passed.');
 }

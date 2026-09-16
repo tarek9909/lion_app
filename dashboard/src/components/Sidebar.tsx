@@ -12,6 +12,7 @@ import {
   Users,
   X,
   Radio,
+  Brain,
 } from 'lucide-react';
 
 export interface SidebarProps {
@@ -84,6 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         { id: 'analytics', label: 'Live Analytics', icon: BarChart3 },
         { id: 'management', label: 'Management AI', icon: Bot, badge: 'Executive', badgeVariant: 'gold' },
+        { id: 'ai-learning', label: 'AI Learning', icon: Brain, badge: 'Self-Learn', badgeVariant: 'cyan' },
       ],
     },
   ];
