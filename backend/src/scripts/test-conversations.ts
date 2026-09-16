@@ -177,18 +177,24 @@ export async function runConversationTestPack(): Promise<boolean> {
     );
 
     const batchState = createInitialState(customer!.id, 'en', first.conversationId);
+    batchState.stage = 'ORDER_PLACED';
     const batchPlan = await aiToolsExecutor.executeTool('create_multi_order_plan', { items: [{ merchant_product_id: Number(burgerRows[0].id), quantity: 1 }] }, customer!.id, batchState, 0, undefined, 'order from both places');
-    assert(batchPlan.success && batchPlan.result.children.length === 2, 'two merchants create two independent reviewable batch children');
-    const addressSet = await aiToolsExecutor.executeTool('set_batch_delivery_address', { address_label: 'Home' }, customer!.id, batchState, 0, undefined, 'same address');
+    assert(batchPlan.success && batchPlan.result.children.length === 2 && String(batchState.stage) === 'MULTI_ORDER_REVIEW', 'a new batch legally leaves ORDER_PLACED before creating two independent reviewable child orders');
+    const missingBatchAddress = await aiToolsExecutor.executeTool('confirm_order_batch', { confirmation_phrase: 'confirm both' }, customer!.id, batchState, 0, undefined, 'confirm both');
+    assert(
+      !missingBatchAddress.success && missingBatchAddress.errorCode === 'BATCH_ADDRESS_REQUIRED' && batchState.nextRequiredAction === 'SELECT_BATCH_ADDRESS',
+      'confirm both without a batch address returns an actionable address requirement instead of an internal failure',
+    );
+    const addressSet = await aiToolsExecutor.executeTool('capture_delivery_address', { raw_address: 'Abra, ustrad Ishammaa' }, customer!.id, batchState, 0, undefined, 'Abra, ustrad Ishammaa');
     await saveConversationState(customer!.id, batchState, first.conversationId);
     const batchConfirm = await aiService.processCustomerMessage(PHONE, 'Confirm both', 'text', { conversationId: first.conversationId });
     const confirmedBatchState = await loadConversationState(customer!.id, first.conversationId);
     const confirmedBatch = await aiToolsExecutor.executeTool('review_multi_order_plan', {}, customer!.id, confirmedBatchState, 0);
     const postOrderMenu = await aiToolsExecutor.executeTool('list_merchant_menu', { merchant_reference: 'Chicken House' }, customer!.id, confirmedBatchState, 0);
     assert(
-      addressSet.success && batchConfirm.responseCategory === 'NORMAL' && confirmedBatch.success && confirmedBatch.result.children.every((child: any) => child.status === 'PLACED') &&
+      addressSet.success && addressSet.result.batch.children.every((child: any) => child.address_id) && batchConfirm.responseCategory === 'NORMAL' && confirmedBatch.success && confirmedBatch.result.children.every((child: any) => child.status === 'PLACED') &&
       postOrderMenu.success && confirmedBatchState.stage === 'SELECTING_OPTION',
-      'batch confirmation infers both from the exact customer text and post-order browsing uses a legal state transition',
+      'typed batch address attaches to both child carts, exact confirm both places both orders, and post-order browsing uses a legal state transition',
     );
 
     const arabiziPickup = (orderService as any).orderStatusNotification('PICKED_UP', {

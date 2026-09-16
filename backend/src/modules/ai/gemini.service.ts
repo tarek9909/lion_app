@@ -174,6 +174,22 @@ export class GeminiService {
     return 'Okay, I kept your cart as it is. What would you like to do next?';
   }
 
+  private batchAddressRequiredReply(language: SenderLanguage): string {
+    if (language === 'arabizi') {
+      return 'L talabayn ba3don bi 7aje la 3enwen delivery. B3at l 3enwen aw location pin, w ba3den rodd "confirm both" marra tene.';
+    }
+    if (language === 'fr') {
+      return 'Vos deux commandes ont encore besoin dâ€™une adresse de livraison. Envoyez lâ€™adresse ou votre position, puis rÃ©pondez Ã  nouveau "confirm both".';
+    }
+    if (language === 'ar' || language === 'ar_lb') {
+      return 'الطلبان ما زالا بحاجة إلى عنوان للتوصيل. أرسل العنوان أو موقعك، ثم أرسل "confirm both" مرة أخرى.';
+    }
+    if (language === 'mixed') {
+      return 'Both orders still need a delivery address. Please send the address or a location pin, then reply "confirm both" again.';
+    }
+    return 'Your two orders still need a delivery address. Please send the address or a location pin, then reply "confirm both" again.';
+  }
+
   private merchantSwitchReply(language: SenderLanguage, merchantName: string, productName?: string): string {
     const item = productName ? ` ${productName}` : ' the selected item';
     if (language === 'arabizi') return `Tamam, faddayt l cart l adeeme w zedt${item} men ${merchantName}. Baddak tshouf l cart aw nkammel checkout?`;
@@ -210,6 +226,17 @@ export class GeminiService {
       return sanitizeCustomerOutput(`ملخص الطلب:\n${lines.join('\n')}\nالتوصيل: $${delivery}\nالإجمالي: $${total}\nأرسل confirm لتأكيد الطلب.`);
     }
     return sanitizeCustomerOutput(`Order summary:\n${lines.join('\n')}\nDelivery: $${delivery}\nTotal: $${total}\nReply confirm to place the order.`);
+  }
+
+  private batchCheckoutSummaryText(language: SenderLanguage, batch: any): string {
+    const children = Array.isArray(batch?.children) ? batch.children : [];
+    const lines = children.map((child: any) =>
+      `Talab ${child.child_index} - ${child.merchant_name}: $${Number(child.total || 0).toFixed(2)} (delivery $${Number(child.delivery_fee || 0).toFixed(2)})`,
+    );
+    if (language === 'arabizi') {
+      return sanitizeCustomerOutput(`Tamam, thabbanna l 3enwen lal talabayn.\n\nHayda molakhass l talabayn:\n${lines.join('\n')}\n\nRodd "confirm both" ta n2akked l talabayn sawa, aw "confirm 1" / "confirm 2".`);
+    }
+    return sanitizeCustomerOutput(`Delivery address confirmed for both orders.\n\n${lines.join('\n')}\n\nReply "confirm both" to place both orders, or "confirm 1" / "confirm 2".`);
   }
 
   private async getHistory(customerId: number, conversationId: number | null): Promise<{ role: 'user' | 'model'; text: string }[]> {
@@ -484,17 +511,21 @@ export class GeminiService {
     }
 
     const isAddressStage = ['SELECTING_ADDRESS', 'ADDRESS_DRAFT_REVIEW'].includes(state.stage);
+    const isBatchAwaitingAddress = Boolean(state.pendingOrderBatchId) &&
+      (state.nextRequiredAction === 'SELECT_BATCH_ADDRESS' || state.expectedEntity === 'delivery_address');
     const isAddressShaped = mediaType === 'location' || /(?:saida|sidon|abra|street|road|building|floor|near|behind|\d{3,}|شارع|صيدا|عبرا)/iu.test(text);
-    if (isAddressStage && isAddressShaped) {
+    if ((isAddressStage || isBatchAwaitingAddress) && isAddressShaped) {
       const execution = await this.executeTool('capture_delivery_address', { raw_address: text }, customer.id, state, 0, options, text);
       const reply = execution.success
-        ? sanitizeCustomerOutput(`${responseLanguage === 'arabizi'
+        ? (state.pendingOrderBatchId
+          ? this.batchCheckoutSummaryText(responseLanguage, execution.result?.batch)
+          : sanitizeCustomerOutput(`${responseLanguage === 'arabizi'
           ? 'Fhemet 3enwenak. Ma fi talab 2abel l ta2kid l saree7.'
           : responseLanguage === 'fr'
             ? 'J’ai compris votre adresse. Aucune commande ne sera créée avant votre confirmation explicite.'
             : responseLanguage === 'ar' || responseLanguage === 'ar_lb' || responseLanguage === 'mixed'
               ? 'تم فهم عنوانك. لن يتم إنشاء طلب قبل تأكيدك الصريح.'
-            : 'I understood your delivery address. No order will be created before your explicit confirmation.'}\n\n${this.checkoutSummaryText(responseLanguage, execution.cartSummary)}`)
+            : 'I understood your delivery address. No order will be created before your explicit confirmation.'}\n\n${this.checkoutSummaryText(responseLanguage, execution.cartSummary)}`))
         : dispatchCustomerError({ errorCode: execution.errorCode, errorMessage: execution.error, result: execution.result, language: responseLanguage, facts: this.errorFacts(execution.result) })?.text || getLanguageSafeFallback(responseLanguage);
       state.lastAssistantQuestion = reply;
       if (!options?.shadowMode && customer.id > 0) {
@@ -984,7 +1015,10 @@ export class GeminiService {
       break;
     }
 
-    if (customerError && !finalText) {
+    if (customerError?.errorCode === 'BATCH_ADDRESS_REQUIRED') {
+      // Do not let a model apology hide an actionable batch checkout step.
+      finalText = this.batchAddressRequiredReply(responseLanguage);
+    } else if (customerError && !finalText) {
       finalText = dispatchCustomerError({ ...customerError, language: responseLanguage, facts: this.errorFacts(customerError.result) })?.text || getLanguageSafeFallback(responseLanguage);
     } else if (!finalText) {
       finalText = getLanguageSafeFallback(responseLanguage);

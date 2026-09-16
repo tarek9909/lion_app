@@ -45,6 +45,15 @@ export class AiToolsExecutor {
     return isHistoricalOrQuestionConfirmation(phrase);
   }
 
+  /** A batch is a new task, even if the prior task ended in an order. */
+  private transitionToBatchReview(state: AIConversationState): boolean {
+    if (state.stage === 'MULTI_ORDER_REVIEW') return true;
+    if (['ORDER_PLACED', 'TRACKING_ORDER', 'HUMAN_SUPPORT'].includes(state.stage)) {
+      if (!transitionConversationStage(state, 'IDLE')) return false;
+    }
+    return transitionConversationStage(state, 'MULTI_ORDER_REVIEW');
+  }
+
   isExplicitMerchantSwitchApproval(phrase: string, confirmSwitchArg?: boolean): boolean {
     if (confirmSwitchArg !== true) {
       return false;
@@ -1084,6 +1093,26 @@ export class AiToolsExecutor {
           formatted: draft.address.formatted_address || draft.address.label,
           area: draft.address.area_name || undefined,
         };
+        // A batch owns its child carts. A verified typed address must be
+        // attached to every reviewable child, never to the ordinary cart only.
+        if (state.pendingOrderBatchId) {
+          if (!this.transitionToBatchReview(state)) {
+            return { toolName, success: false, error: 'BATCH_STATE_RECOVERY_FAILED', errorCode: 'BATCH_STATE_RECOVERY_FAILED', stateChanged: false };
+          }
+          const batch = await orderBatchService.setSharedAddress(state.pendingOrderBatchId, customerId, draft.address.id);
+          state.awaitingConfirmation = true;
+          state.cartSummary = null;
+          state.checkoutFingerprint = null;
+          state.nextRequiredAction = 'CONFIRM_ORDER_BATCH';
+          state.expectedEntity = 'confirm_both_or_child';
+          return {
+            toolName,
+            success: true,
+            result: { address_status: 'serviceable', address_summary: draft.safeSummary, batch: this.batchResult(batch), ready_for_confirmation: true },
+            cartSummary: null,
+            stateChanged: true,
+          };
+        }
         state.awaitingConfirmation = true;
         transitionConversationStage(state, 'AWAITING_CONFIRMATION');
         const summary = await this.refreshCartSummary(customerId, options?.shadowMode, state);
@@ -1436,6 +1465,11 @@ export class AiToolsExecutor {
       }
 
       case 'create_multi_order_plan': {
+        // Change state before writing batch rows, so the durable batch cannot
+        // be stranded behind a rejected ORDER_PLACED -> MULTI_ORDER_REVIEW jump.
+        if (!this.transitionToBatchReview(state)) {
+          return { toolName, success: false, error: 'BATCH_STATE_TRANSITION_REJECTED', errorCode: 'BATCH_STATE_TRANSITION_REJECTED', stateChanged: false };
+        }
         const active = await cartService.getActiveCartReadOnly(customerId);
         let selections = (validatedArgs.items || []).map((item: any) => ({
           merchantProductId: item.merchant_product_id,
@@ -1481,7 +1515,6 @@ export class AiToolsExecutor {
         state.pendingOrderBatchId = batch.id;
         state.nextRequiredAction = batch.children.every((child) => child.addressId) ? 'CONFIRM_ORDER_BATCH' : 'SELECT_BATCH_ADDRESS';
         state.expectedEntity = batch.children.every((child) => child.addressId) ? 'confirm_both_or_child' : 'delivery_address';
-        transitionConversationStage(state, 'MULTI_ORDER_REVIEW');
         return { toolName, success: true, result: this.batchResult(batch), stateChanged: true };
       }
 
@@ -1496,9 +1529,14 @@ export class AiToolsExecutor {
         const matched = await customerService.resolveAddressByPhrase(customerId, validatedArgs.address_label);
         if (!matched) return { toolName, success: false, error: 'ADDRESS_NOT_FOUND', errorCode: 'ADDRESS_NOT_FOUND', stateChanged: false };
         const batch = await orderBatchService.setSharedAddress(state.pendingOrderBatchId, customerId, matched.id);
+        state.selectedAddress = { id: matched.id, label: matched.label, formatted: matched.formatted_address || matched.label, area: matched.area_name || undefined };
+        state.awaitingConfirmation = true;
+        state.checkoutFingerprint = null;
         state.nextRequiredAction = 'CONFIRM_ORDER_BATCH';
         state.expectedEntity = 'confirm_both_or_child';
-        transitionConversationStage(state, 'MULTI_ORDER_REVIEW');
+        if (!this.transitionToBatchReview(state)) {
+          return { toolName, success: false, error: 'BATCH_STATE_RECOVERY_FAILED', errorCode: 'BATCH_STATE_RECOVERY_FAILED', stateChanged: false };
+        }
         return { toolName, success: true, result: this.batchResult(batch), stateChanged: true };
       }
 
@@ -1510,10 +1548,23 @@ export class AiToolsExecutor {
 
       case 'confirm_order_batch': {
         if (!state.pendingOrderBatchId) return { toolName, success: false, error: 'NO_PENDING_ORDER_BATCH', errorCode: 'NO_PENDING_ORDER_BATCH', stateChanged: false };
+        if (!this.transitionToBatchReview(state)) {
+          return { toolName, success: false, error: 'BATCH_STATE_RECOVERY_FAILED', errorCode: 'BATCH_STATE_RECOVERY_FAILED', stateChanged: false };
+        }
         const phrase = String(userMessage || validatedArgs.confirmation_phrase || '').trim().toLowerCase();
         const inferredSelection = validatedArgs.selection || inferBatchSelection(phrase);
         if (!inferredSelection || !['1', '2', 'both'].includes(inferredSelection) || !this.isExplicitConfirmation(phrase.replace('both', '').replace(/\b[12]\b/g, '').trim() || 'confirm')) {
           return { toolName, success: false, error: 'EXPLICIT_BATCH_CONFIRMATION_REQUIRED', errorCode: 'EXPLICIT_CONFIRMATION_REQUIRED', stateChanged: false };
+        }
+        const currentBatch = await orderBatchService.getBatchSummary(state.pendingOrderBatchId, { refreshQuotes: false });
+        const selectedChildren = inferredSelection === 'both'
+          ? currentBatch.children.filter((child) => child.status === 'REVIEW')
+          : [currentBatch.children[Number(inferredSelection) - 1]].filter(Boolean);
+        if (!selectedChildren.length || selectedChildren.some((child) => !child.addressId)) {
+          state.nextRequiredAction = 'SELECT_BATCH_ADDRESS';
+          state.expectedEntity = 'delivery_address';
+          state.awaitingConfirmation = false;
+          return { toolName, success: false, result: this.batchResult(currentBatch), error: 'BATCH_ADDRESS_REQUIRED', errorCode: 'BATCH_ADDRESS_REQUIRED', stateChanged: true };
         }
         const batch = await orderBatchService.confirm(state.pendingOrderBatchId, customerId, inferredSelection as '1' | '2' | 'both', state.conversationId || null);
         if (batch.status === 'PLACED') {
