@@ -20,6 +20,8 @@ export interface RawConversationTurn {
   orderStatus?: string;
   humanHandoff?: boolean;
   hadError?: boolean;
+  history?: Array<{ role: 'user' | 'assistant' | 'tool'; text: string }>;
+  stateBefore?: Record<string, any>;
   createdAt?: string;
 }
 
@@ -39,6 +41,8 @@ export interface HarvestedCurationItem {
   sanitizedModelResponse: string;
   detectedIntent: string;
   toolCallsJson: any;
+  history?: Array<{ role: 'user' | 'assistant' | 'tool'; text: string }>;
+  stateBefore?: Record<string, any>;
   qualityScore: number;
   conversionStatus: 'CONVERTED_ORDER' | 'BROWSED_ONLY' | 'CANCELLED' | 'HANDED_OFF';
   reviewStatus: 'PENDING' | 'HUMAN_APPROVED' | 'REJECTED';
@@ -170,6 +174,8 @@ export class ConversationHarvesterService {
       sanitizedModelResponse: sanitizedAssistant,
       detectedIntent: turn.detectedIntent || 'UNKNOWN',
       toolCallsJson: turn.toolCalls ? PiiRedactor.redactObject(turn.toolCalls) : [],
+      history: PiiRedactor.redactObject(turn.history || []),
+      stateBefore: PiiRedactor.redactObject(turn.stateBefore || {}),
       qualityScore,
       conversionStatus,
       reviewStatus: qualityScore >= 75 ? 'PENDING' : 'REJECTED',
@@ -201,11 +207,12 @@ export class ConversationHarvesterService {
           sanitized_model_response,
           detected_intent,
           tool_calls_json,
+          context_json,
           quality_score,
           conversion_status,
           review_status,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE updated_at = NOW()`,
         [
           curationItem.publicId,
@@ -221,14 +228,49 @@ export class ConversationHarvesterService {
           curationItem.sanitizedModelResponse,
           curationItem.detectedIntent,
           JSON.stringify(curationItem.toolCallsJson),
+          JSON.stringify({ history: curationItem.history || [], state_before: curationItem.stateBefore || {} }),
           curationItem.qualityScore,
           curationItem.conversionStatus,
           curationItem.reviewStatus,
         ]
       );
     } catch (err: any) {
-      console.error('[ConversationHarvester] MySQL insert error:', err.message);
-      throw err;
+      // Older installations may not have the optional context projection yet.
+      // Preserve backwards compatibility while the startup migration catches
+      // the schema up; the in-memory item still retains full context.
+      if (Number(err?.errno) === 1054 && String(err?.message || '').includes('context_json')) {
+        await execute(
+          `INSERT INTO training_curation_queue (
+            public_id, conversation_id, customer_id, turn_index, correlation_id,
+            inbound_message_id, assistant_message_id, dataset_version,
+            sender_language, sanitized_user_message, sanitized_model_response,
+            detected_intent, tool_calls_json, quality_score, conversion_status,
+            review_status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE updated_at = NOW()`,
+          [
+            curationItem.publicId,
+            curationItem.conversationId || null,
+            curationItem.customerId || null,
+            curationItem.turnIndex,
+            curationItem.correlationId,
+            curationItem.inboundMessageId,
+            curationItem.assistantMessageId,
+            curationItem.datasetVersion,
+            curationItem.senderLanguage,
+            curationItem.sanitizedUserMessage,
+            curationItem.sanitizedModelResponse,
+            curationItem.detectedIntent,
+            JSON.stringify(curationItem.toolCallsJson),
+            curationItem.qualityScore,
+            curationItem.conversionStatus,
+            curationItem.reviewStatus,
+          ]
+        );
+      } else {
+        console.error('[ConversationHarvester] MySQL insert error:', err.message);
+        throw err;
+      }
     }
 
     return curationItem;
@@ -306,10 +348,25 @@ export class ConversationHarvesterService {
           ? JSON.parse(row.structured_output || '{}')
           : row.structured_output || {};
 
+        let durableHistory: Array<{ role: 'user' | 'assistant' | 'tool'; text: string }> = [];
+        try {
+          const contextRows = await query<any[]>(
+            `SELECT direction, sender_type, text_body
+             FROM messages
+             WHERE conversation_id = ? AND id <= ? AND text_body IS NOT NULL
+             ORDER BY id DESC LIMIT 8`,
+            [row.conversation_id, row.message_id]
+          );
+          durableHistory = contextRows.reverse().map((entry) => ({
+            role: entry.direction === 'INBOUND' || entry.sender_type === 'CUSTOMER' ? 'user' as const : 'assistant' as const,
+            text: String(entry.text_body || ''),
+          }));
+        } catch {}
+
         const turn: RawConversationTurn = {
           conversationId: row.conversation_id,
           customerId: row.customer_id,
-          turnIndex: 1,
+          turnIndex: Number(structured.turn_index || row.turn_index || 1),
           inboundMessageId: row.message_id,
           correlationId: structured.turn_correlation_id || structured.request_id || `msg_${row.message_id}`,
           userMessage: row.user_text,
@@ -320,6 +377,8 @@ export class ConversationHarvesterService {
           orderStatus: row.order_status || 'UNKNOWN',
           humanHandoff: Boolean(structured.human_handoff),
           hadError: row.ai_success === 0 || Boolean(row.error_code),
+          history: durableHistory,
+          stateBefore: structured.state_before || {},
         };
 
         const staged = await this.stageTurnForCuration(turn);
@@ -420,7 +479,7 @@ export class ConversationHarvesterService {
           id, public_id, conversation_id, customer_id, turn_index,
           correlation_id, inbound_message_id, assistant_message_id, dataset_version,
           sender_language, sanitized_user_message, sanitized_model_response,
-          detected_intent, tool_calls_json, quality_score, conversion_status,
+          detected_intent, tool_calls_json, context_json, quality_score, conversion_status,
           review_status, reviewed_by, reviewed_at, review_notes, created_at
          FROM training_curation_queue
          WHERE review_status = ? AND quality_score >= ?
@@ -445,6 +504,8 @@ export class ConversationHarvesterService {
           sanitizedModelResponse: r.sanitized_model_response,
           detectedIntent: r.detected_intent,
           toolCallsJson: typeof r.tool_calls_json === 'string' ? JSON.parse(r.tool_calls_json || '[]') : r.tool_calls_json,
+          history: typeof r.context_json === 'string' ? JSON.parse(r.context_json || '{}').history || [] : (r.context_json?.history || []),
+          stateBefore: typeof r.context_json === 'string' ? JSON.parse(r.context_json || '{}').state_before || {} : (r.context_json?.state_before || {}),
           qualityScore: r.quality_score,
           conversionStatus: r.conversion_status,
           reviewStatus: r.review_status,
@@ -455,6 +516,31 @@ export class ConversationHarvesterService {
         }));
       }
     } catch (err: any) {
+      if (Number(err?.errno) === 1054 && String(err?.message || '').includes('context_json')) {
+        const legacyRows = await query<any[]>(
+          `SELECT id, public_id, conversation_id, customer_id, turn_index,
+            correlation_id, inbound_message_id, assistant_message_id, dataset_version,
+            sender_language, sanitized_user_message, sanitized_model_response,
+            detected_intent, tool_calls_json, quality_score, conversion_status,
+            review_status, reviewed_by, reviewed_at, review_notes, created_at
+           FROM training_curation_queue
+           WHERE review_status = ? AND quality_score >= ?
+           ORDER BY quality_score DESC, created_at DESC LIMIT ?`,
+          [status, minScore, limit]
+        );
+        if (legacyRows.length > 0) {
+          return legacyRows.map((r) => ({
+            id: r.id, publicId: r.public_id, conversationId: r.conversation_id, customerId: r.customer_id,
+            turnIndex: r.turn_index, correlationId: r.correlation_id, inboundMessageId: r.inbound_message_id,
+            assistantMessageId: r.assistant_message_id, datasetVersion: r.dataset_version, senderLanguage: r.sender_language,
+            sanitizedUserMessage: r.sanitized_user_message, sanitizedModelResponse: r.sanitized_model_response,
+            detectedIntent: r.detected_intent,
+            toolCallsJson: typeof r.tool_calls_json === 'string' ? JSON.parse(r.tool_calls_json || '[]') : r.tool_calls_json,
+            qualityScore: r.quality_score, conversionStatus: r.conversion_status, reviewStatus: r.review_status,
+            reviewedBy: r.reviewed_by, reviewedAt: r.reviewed_at, reviewNotes: r.review_notes, createdAt: r.created_at,
+          }));
+        }
+      }
       console.error('[ConversationHarvester] getQueue DB error:', err.message);
       throw err;
     }
@@ -518,8 +604,8 @@ export class ConversationHarvesterService {
         customer_id: customerIdStr,
         split,
         turn_index: item.turnIndex,
-        history: [],
-        state_before: {},
+        history: item.history || [],
+        state_before: item.stateBefore || {},
         customer_message: item.sanitizedUserMessage,
         // Faithful paired assistant response (P0 closure)
         model_response: item.sanitizedModelResponse,
@@ -528,8 +614,8 @@ export class ConversationHarvesterService {
           : 'en') as any,
         intent: item.detectedIntent,
         entities: {},
-        needs_clarification: false,
-        clarification_type: null,
+        needs_clarification: item.detectedIntent === 'CLARIFICATION' || item.detectedIntent === 'CLARIFICATION_REQUIRED',
+        clarification_type: item.detectedIntent === 'CLARIFICATION' || item.detectedIntent === 'CLARIFICATION_REQUIRED' ? 'CONTEXTUAL' : null,
         expected_tool: item.toolCallsJson?.[0]?.name || null,
         expected_tool_arguments: item.toolCallsJson?.[0]?.args || null,
         expected_state_change: null,

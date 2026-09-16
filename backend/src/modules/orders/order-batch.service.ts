@@ -119,10 +119,10 @@ export class OrderBatchService {
     return this.getBatchSummary(batchId);
   }
 
-  async getBatchSummary(batchId: number): Promise<OrderBatchSummary> {
+  async getBatchSummary(batchId: number, options?: { refreshQuotes?: boolean }): Promise<OrderBatchSummary> {
     const rows = await query<any[]>(`SELECT id, public_id, status, payment_policy FROM order_batches WHERE id = ? LIMIT 1`, [batchId]);
     if (!rows.length) throw new Error('Order batch was not found');
-    const children = await this.getChildRows(batchId);
+    const children = await this.getChildRows(batchId, options?.refreshQuotes !== false);
     return {
       id: Number(rows[0].id),
       publicId: String(rows[0].public_id),
@@ -150,7 +150,7 @@ export class OrderBatchService {
     );
   }
 
-  private async getChildRows(batchId: number): Promise<any[]> {
+  private async getChildRows(batchId: number, refreshQuotes = true): Promise<any[]> {
     const rows = await query<any[]>(`
       SELECT bc.*, m.name AS merchant_name, o.order_number
       FROM order_batch_children bc
@@ -160,7 +160,7 @@ export class OrderBatchService {
       ORDER BY bc.id ASC
     `, [batchId]);
     for (const child of rows) {
-      if (['REVIEW', 'FAILED'].includes(String(child.status))) {
+      if (refreshQuotes && ['REVIEW', 'FAILED'].includes(String(child.status))) {
         const cart = await cartService.getCartById(Number(child.cart_id));
         child.quoted_subtotal = cart.subtotal;
         child.quoted_delivery_fee = cart.estimated_delivery_fee;

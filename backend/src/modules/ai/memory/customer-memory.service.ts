@@ -37,7 +37,7 @@ export class CustomerMemoryService {
    * Priority: Redis -> MySQL -> In-Memory fallback.
    * Fully durable across Redis flushes and service restarts.
    */
-  async getPreferences(customerId: number): Promise<CustomerMemoryPreferences> {
+  async getPreferences(customerId: number, options?: { readOnly?: boolean }): Promise<CustomerMemoryPreferences> {
     if (!customerId || customerId <= 0) {
       return this.createEmptyPreferences(customerId);
     }
@@ -88,11 +88,12 @@ export class CustomerMemoryService {
         const cleaned = this.cleanExpiredMemoryItems(prefs);
 
         // Cache in Redis for 24h
-        try {
-          await redis.set(`ai:customer:prefs:${customerId}`, JSON.stringify(cleaned), 86400);
-        } catch {}
-
-        this.inMemoryCache.set(customerId, cleaned);
+        if (!options?.readOnly) {
+          try {
+            await redis.set(`ai:customer:prefs:${customerId}`, JSON.stringify(cleaned), 86400);
+          } catch {}
+          this.inMemoryCache.set(customerId, cleaned);
+        }
         return cleaned;
       }
     } catch {
@@ -100,7 +101,7 @@ export class CustomerMemoryService {
     }
 
     const defaultPrefs = this.createEmptyPreferences(customerId);
-    this.inMemoryCache.set(customerId, defaultPrefs);
+    if (!options?.readOnly) this.inMemoryCache.set(customerId, defaultPrefs);
     return defaultPrefs;
   }
 
@@ -140,25 +141,25 @@ export class CustomerMemoryService {
       }
     }
 
-    const dietaryPreferences = options?.replaceArrays && updates.dietaryPreferences !== undefined
-      ? updates.dietaryPreferences
-      : Array.from(new Set([...(current.dietaryPreferences || []), ...(updates.dietaryPreferences || [])]));
+    // The legacy array columns are projections of structured memory items.
+    // Never promote a single-turn UNCONFIRMED_SUGGESTION into a verified
+    // preference merely because a caller supplied the convenience array.
+    const mergeArray = (field: keyof CustomerMemoryPreferences): string[] => {
+      const incoming = updates[field] as string[] | undefined;
+      if (options?.replaceArrays && incoming !== undefined) return Array.from(new Set(incoming));
+      // Explicit operator/API saves may legitimately populate projection
+      // arrays without structured evidence. Automatic observation never sends
+      // these arrays for an unconfirmed suggestion, and cleanExpiredMemoryItems
+      // removes any value that is explicitly marked unconfirmed.
+      if (!incoming) return Array.from(new Set((current[field] as string[] | undefined) || []));
+      return Array.from(new Set([...(current[field] as string[] || []), ...incoming]));
+    };
 
-    const excludedIngredients = options?.replaceArrays && updates.excludedIngredients !== undefined
-      ? updates.excludedIngredients
-      : Array.from(new Set([...(current.excludedIngredients || []), ...(updates.excludedIngredients || [])]));
-
-    const favoriteCuisines = options?.replaceArrays && updates.favoriteCuisines !== undefined
-      ? updates.favoriteCuisines
-      : Array.from(new Set([...(current.favoriteCuisines || []), ...(updates.favoriteCuisines || [])]));
-
-    const deliveryLandmarks = options?.replaceArrays && updates.deliveryLandmarks !== undefined
-      ? updates.deliveryLandmarks
-      : Array.from(new Set([...(current.deliveryLandmarks || []), ...(updates.deliveryLandmarks || [])]));
-
-    const specialInstructions = options?.replaceArrays && updates.specialInstructions !== undefined
-      ? updates.specialInstructions
-      : Array.from(new Set([...(current.specialInstructions || []), ...(updates.specialInstructions || [])]));
+    const dietaryPreferences = mergeArray('dietaryPreferences');
+    const excludedIngredients = mergeArray('excludedIngredients');
+    const favoriteCuisines = mergeArray('favoriteCuisines');
+    const deliveryLandmarks = mergeArray('deliveryLandmarks');
+    const specialInstructions = mergeArray('specialInstructions');
 
     const merged: CustomerMemoryPreferences = {
       ...current,
@@ -177,12 +178,6 @@ export class CustomerMemoryService {
     };
 
     const cleaned = this.cleanExpiredMemoryItems(merged);
-    this.inMemoryCache.set(customerId, cleaned);
-
-    // Save to Redis
-    try {
-      await redis.set(`ai:customer:prefs:${customerId}`, JSON.stringify(cleaned), 86400);
-    } catch {}
 
     // Save to MySQL with upsert (all fields including landmarks and instructions)
     try {
@@ -265,6 +260,14 @@ export class CustomerMemoryService {
       throw dbErr;
     }
 
+    // Publish to caches only after the authoritative MySQL write succeeds;
+    // otherwise a transient DB failure could expose uncommitted memory on the
+    // next turn.
+    this.inMemoryCache.set(customerId, cleaned);
+    try {
+      await redis.set(`ai:customer:prefs:${customerId}`, JSON.stringify(cleaned), 86400);
+    } catch {}
+
     return cleaned;
   }
 
@@ -315,9 +318,21 @@ export class CustomerMemoryService {
   async optOutAndEraseMemory(customerId: number, performedBy?: number): Promise<boolean> {
     this.inMemoryCache.delete(customerId);
 
+    const conversationRows = await query<any[]>(
+      `SELECT id FROM conversations WHERE customer_id = ?`,
+      [customerId]
+    ).catch(() => [] as any[]);
+    const conversationIds = conversationRows.map((row) => Number(row.id)).filter((id) => id > 0);
+
     // 1. Purge Redis
     try {
       await redis.del(`ai:customer:prefs:${customerId}`);
+      await redis.del(`ai:state:${customerId}`);
+      await redis.del(`ai:history:${customerId}`);
+      for (const conversationId of conversationIds) {
+        await redis.del(`ai:state:${conversationId}`);
+        await redis.del(`ai:history:${conversationId}`);
+      }
     } catch (err: any) {
       console.warn(`[CustomerMemory] Redis del warning for ${customerId}:`, err.message);
     }
@@ -344,7 +359,10 @@ export class CustomerMemoryService {
       throw new Error(`Failed to erase customer preferences in database: ${(dbErr as Error).message}`);
     }
 
-    // 3. Delete from training curation queue and customer_memory_items (P0 & P1 privacy requirement)
+    // 3. Delete canonical memory and every AI-derived trace for this customer.
+    // Missing optional tables are tolerated for older installations; any
+    // other database error remains fatal so erasure cannot be reported as done
+    // while data is still present.
     let deletedTurnsCount = 0;
     try {
       await execute(`DELETE FROM customer_memory_items WHERE customer_id = ?`, [customerId]);
@@ -353,6 +371,26 @@ export class CustomerMemoryService {
         [customerId]
       );
       deletedTurnsCount = res?.affectedRows || 0;
+
+      const deleteOptional = async (sql: string, params: any[] = []) => {
+        try {
+          await execute(sql, params);
+        } catch (err: any) {
+          if (Number(err?.errno) === 1146 || err?.code === 'ER_NO_SUCH_TABLE') return;
+          throw err;
+        }
+      };
+      if (conversationIds.length > 0) {
+        const placeholders = conversationIds.map(() => '?').join(',');
+        await deleteOptional(`DELETE FROM conversation_ai_events WHERE conversation_id IN (${placeholders})`, conversationIds);
+        await deleteOptional(`DELETE FROM ai_turn_outcomes WHERE conversation_id IN (${placeholders})`, conversationIds);
+        await deleteOptional(`DELETE FROM conversation_summaries WHERE conversation_id IN (${placeholders})`, conversationIds);
+        await deleteOptional(`DELETE FROM conversation_tasks WHERE conversation_id IN (${placeholders})`, conversationIds);
+        await deleteOptional(`DELETE FROM ai_interactions WHERE conversation_id IN (${placeholders})`, conversationIds);
+        await deleteOptional(`DELETE FROM search_sessions WHERE conversation_id IN (${placeholders})`, conversationIds);
+        await deleteOptional(`DELETE FROM conversation_state WHERE conversation_id IN (${placeholders})`, conversationIds);
+      }
+      await deleteOptional(`DELETE FROM ai_learning_cases WHERE customer_id = ?`, [customerId]);
     } catch (dbErr) {
       console.error(`[CustomerMemory] Queue/Items deletion failed for customer ${customerId}:`, (dbErr as Error).message);
       throw new Error(`Failed to delete customer memory rows: ${(dbErr as Error).message}`);
@@ -812,8 +850,36 @@ export class CustomerMemoryService {
       return new Date(item.expiresAt).getTime() > now;
     });
 
+    const unconfirmedByType = new Map<MemoryItem['type'], Set<string>>();
+    for (const item of activeItems) {
+      if (item.confirmationStatus !== 'UNCONFIRMED_SUGGESTION') continue;
+      const values = unconfirmedByType.get(item.type) || new Set<string>();
+      values.add(item.item.trim().toLowerCase());
+      unconfirmedByType.set(item.type, values);
+    }
+    const confirmedByType = new Map<MemoryItem['type'], string[]>();
+    for (const item of activeItems) {
+      if (item.confirmationStatus === 'UNCONFIRMED_SUGGESTION') continue;
+      const values = confirmedByType.get(item.type) || [];
+      if (!values.some((value) => value.toLowerCase() === item.item.toLowerCase())) values.push(item.item);
+      confirmedByType.set(item.type, values);
+    }
+    const project = (values: string[] | undefined, type: MemoryItem['type']): string[] => {
+      const blocked = unconfirmedByType.get(type) || new Set<string>();
+      const result = (values || []).filter((value) => !blocked.has(String(value).trim().toLowerCase()));
+      for (const value of confirmedByType.get(type) || []) {
+        if (!result.some((entry) => entry.toLowerCase() === value.toLowerCase())) result.push(value);
+      }
+      return Array.from(new Set(result));
+    };
+
     return {
       ...prefs,
+      dietaryPreferences: project(prefs.dietaryPreferences, 'dietary'),
+      excludedIngredients: project(prefs.excludedIngredients, 'exclusion'),
+      favoriteCuisines: project(prefs.favoriteCuisines, 'cuisine'),
+      deliveryLandmarks: project(prefs.deliveryLandmarks, 'landmark'),
+      specialInstructions: project(prefs.specialInstructions, 'instruction'),
       memoryItems: activeItems,
     };
   }

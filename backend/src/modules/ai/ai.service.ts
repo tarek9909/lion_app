@@ -26,6 +26,7 @@ import {
 } from './sender-language.js';
 import { localizeSmartNluResult } from './response-localizer.js';
 import { withConversationTurnLock } from '../conversations/conversation-turn-lock.js';
+import { sanitizeCustomerOutput } from './customer-output.js';
 
 export { AIContextState, ValidatedIntent, AIProcessResult };
 
@@ -131,14 +132,19 @@ export class AIService {
         options
       );
 
-      if (route.provider === 'smart_nlu') return route.result;
+      const customerSafeResult = (result: AIProcessResult): AIProcessResult => ({
+        ...result,
+        replyText: sanitizeCustomerOutput(result.replyText),
+      });
+
+      if (route.provider === 'smart_nlu') return customerSafeResult(route.result);
 
       const senderLanguage = detectSenderLanguage(messageText);
-      if (isResponseInSenderLanguage(senderLanguage, route.result.replyText) || isContextualConversationFollowUp(messageText)) return route.result;
+      if (isResponseInSenderLanguage(senderLanguage, route.result.replyText) || isContextualConversationFollowUp(messageText)) return customerSafeResult(route.result);
 
       return {
         ...route.result,
-        replyText: getLanguageSafeFallback(senderLanguage),
+        replyText: sanitizeCustomerOutput(getLanguageSafeFallback(senderLanguage)),
       };
     });
   }

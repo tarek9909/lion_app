@@ -73,13 +73,34 @@ export async function persistInboundMessage(
   }
 
   const convRows = await query<any[]>(
-    `SELECT id FROM conversations WHERE customer_id = ? AND status = 'OPEN' ORDER BY id DESC LIMIT 1`,
+    `SELECT id, last_message_at
+     FROM conversations
+     WHERE customer_id = ? AND status = 'OPEN'
+     ORDER BY id DESC LIMIT 1`,
     [customerId]
   );
 
   let conversationId: number;
   if (convRows.length > 0) {
-    conversationId = Number(convRows[0].id);
+    const lastMessageAt = convRows[0].last_message_at ? new Date(convRows[0].last_message_at).getTime() : 0;
+    const inactiveForMs = lastMessageAt > 0 ? Date.now() - lastMessageAt : 0;
+    // Do not let an abandoned OPEN conversation own a new shopping session.
+    // The previous transcript remains durable, while a fresh conversation gets
+    // a clean task/state boundary after 24 hours of inactivity.
+    if (inactiveForMs > 24 * 60 * 60 * 1000) {
+      await execute(
+        `UPDATE conversations SET status = 'CLOSED' WHERE id = ? AND status = 'OPEN'`,
+        [convRows[0].id]
+      );
+      const newConv: any = await execute(
+        `INSERT INTO conversations (public_id, customer_id, channel, conversation_type, status, ai_mode)
+         VALUES (?, ?, 'WHATSAPP', 'CUSTOMER_ORDER', 'OPEN', 'AI')`,
+        [uuidv4(), customerId]
+      );
+      conversationId = Number(newConv.insertId);
+    } else {
+      conversationId = Number(convRows[0].id);
+    }
   } else {
     const newConv: any = await execute(
       `INSERT INTO conversations (public_id, customer_id, channel, conversation_type, status, ai_mode)

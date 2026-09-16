@@ -1209,12 +1209,19 @@ export class AiToolsExecutor {
           merchantProductId: item.merchant_product_id,
           quantity: item.quantity || 1,
         }));
+        const batchSelectionKey = selections
+          .map((item: any) => `${item.merchantProductId}:${item.quantity}`)
+          .sort()
+          .join('|');
         const batch = await orderBatchService.createOrExtendBatch({
           customerId,
           conversationId: state.conversationId || null,
           sourceCartId: active?.id || null,
           additionalItems: selections,
-          idempotencyKey: `conversation_batch:${state.conversationId || customerId}:${state.turnIndex || 0}:${selections.map((item: any) => item.merchantProductId).join(',')}`,
+          // Stable within the active cart/plan so duplicate webhook delivery
+          // cannot create a second batch, while a new cart can intentionally
+          // start a fresh plan later.
+          idempotencyKey: `conversation_batch:${state.conversationId || customerId}:${active?.id || 0}:${batchSelectionKey}`,
         });
         state.pendingOrderBatchId = batch.id;
         state.nextRequiredAction = batch.children.every((child) => child.addressId) ? 'CONFIRM_ORDER_BATCH' : 'SELECT_BATCH_ADDRESS';

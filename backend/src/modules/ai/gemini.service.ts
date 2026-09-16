@@ -4,7 +4,7 @@ import { cartService } from '../carts/cart.service.js';
 import { customerService } from '../customers/customer.service.js';
 import { orderService } from '../orders/order.service.js';
 import { redis } from '../../database/redis.js';
-import { AIProcessResult, ValidatedIntent } from './ai.types.js';
+import { AIProcessResult, CustomerResponseCategory, ValidatedIntent } from './ai.types.js';
 import { getAuthoritativeGeminiToolDeclarations } from './contract/tool-schemas.js';
 import { getGeminiSystemPrompt, PROMPT_VERSION } from './prompts/gemini.system-prompt.js';
 import {
@@ -211,10 +211,34 @@ export class GeminiService {
   }
 
   private async getHistory(customerId: number, conversationId: number | null): Promise<{ role: 'user' | 'model'; text: string }[]> {
+    const key = `ai:history:${conversationId || customerId}`;
+    // MySQL is the durable source of truth. Redis is only a cache, so a
+    // restart/expiry must not erase the meaning of an unfinished task.
     try {
-      const raw = await redis.get(`ai:history:${conversationId || customerId}`);
+      if (conversationId) {
+        const rows = await query<any[]>(
+          `SELECT direction, sender_type, text_body
+           FROM messages
+           WHERE conversation_id = ? AND text_body IS NOT NULL AND text_body <> ''
+           ORDER BY id DESC LIMIT 12`,
+          [conversationId]
+        );
+        if (rows.length > 0) {
+          const durable = rows.reverse().map((row) => ({
+            role: row.direction === 'INBOUND' || row.sender_type === 'CUSTOMER' ? 'user' as const : 'model' as const,
+            text: String(row.text_body || '').slice(0, this.maxCustomerMessageLength),
+          }));
+          await redis.set(key, JSON.stringify(durable), 86400).catch(() => undefined);
+          return durable;
+        }
+      }
+    } catch {}
+
+    try {
+      const raw = await redis.get(key);
       if (raw) {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.slice(-12);
       }
     } catch {}
     return [];
@@ -223,9 +247,14 @@ export class GeminiService {
   private async appendHistory(customerId: number, conversationId: number | null, userText: string, modelText: string): Promise<void> {
     try {
       const history = await this.getHistory(customerId, conversationId);
-      history.push({ role: 'user', text: userText });
+      const last = history[history.length - 1];
+      // The inbound message is persisted before Gemini is called. Avoid
+      // duplicating it when the Redis cache is rebuilt from MySQL.
+      if (!last || last.role !== 'user' || last.text !== userText) {
+        history.push({ role: 'user', text: userText });
+      }
       history.push({ role: 'model', text: modelText });
-      const trimmed = history.slice(-10);
+      const trimmed = history.slice(-12);
       await redis.set(`ai:history:${conversationId || customerId}`, JSON.stringify(trimmed), 86400);
     } catch (err) {
       console.warn('[Gemini Service] Error updating history in Redis:', err);
@@ -247,6 +276,17 @@ export class GeminiService {
         latest.stage = state.stage;
         latest.nextRequiredAction = state.nextRequiredAction;
         latest.expectedEntity = state.expectedEntity;
+        latest.pendingProductCategory = state.pendingProductCategory;
+        latest.pendingProductMerchantBranchId = state.pendingProductMerchantBranchId;
+        latest.addressDraft = state.addressDraft;
+        latest.pendingOrderBatchId = state.pendingOrderBatchId;
+        latest.pendingClarification = state.pendingClarification;
+        latest.pendingMerchantSwitch = state.pendingMerchantSwitch;
+        latest.selectedAddress = state.selectedAddress;
+        latest.selectedMerchant = state.selectedMerchant;
+        latest.cartSummary = state.cartSummary;
+        latest.awaitingConfirmation = state.awaitingConfirmation;
+        latest.checkoutFingerprint = state.checkoutFingerprint;
         await saveConversationState(customerId, latest, conversationId, { enforceCas: true });
       } else {
         throw err;
@@ -330,6 +370,8 @@ export class GeminiService {
       conversationId?: number;
       inboundMessageId?: number;
       modelEndpoint?: string;
+      /** Pre-turn snapshot used by shadow evaluation to avoid seeing stable mutations. */
+      stateSnapshot?: AIConversationState;
     }
   ): Promise<AIProcessResult & { shadowExecution?: boolean }> {
     const apiKey = config.ai.geminiApiKey;
@@ -371,7 +413,11 @@ export class GeminiService {
     const conversationId: number | null = options?.conversationId || null;
     const requestId = options?.requestId || randomUUID();
 
-    const state = customer.id > 0 ? await loadConversationState(customer.id, conversationId) : createInitialState(-1, 'arabizi', conversationId);
+    const state = customer.id > 0
+      ? options?.stateSnapshot
+        ? JSON.parse(JSON.stringify(options.stateSnapshot)) as AIConversationState
+        : await loadConversationState(customer.id, conversationId)
+      : createInitialState(-1, 'arabizi', conversationId);
     const previousTurnCount = state.turnIndex || 0;
     state.conversationId = conversationId;
     state.turnIndex = (state.turnIndex || 0) + 1;
@@ -390,6 +436,7 @@ export class GeminiService {
         replyText: reply,
         intent: 'GENERAL_GREETING',
         confidence: 0.99,
+        responseCategory: 'CLARIFICATION',
       };
     }
 
@@ -421,7 +468,7 @@ export class GeminiService {
         await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
-      return { replyText: reply, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
+      return { replyText: reply, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, responseCategory: 'CLARIFICATION', shadowExecution: !!options?.shadowMode };
     }
 
     // A greeting must not discard a pending address/confirmation/product task.
@@ -431,7 +478,7 @@ export class GeminiService {
         await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
-      return { replyText: reply, intent: 'CONTINUE_PENDING_TASK' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
+      return { replyText: reply, intent: 'CONTINUE_PENDING_TASK' as ValidatedIntent, confidence: 0.99, responseCategory: 'CLARIFICATION', shadowExecution: !!options?.shadowMode };
     }
 
     const isAddressStage = ['SELECTING_ADDRESS', 'ADDRESS_DRAFT_REVIEW'].includes(state.stage);
@@ -452,7 +499,7 @@ export class GeminiService {
         await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
-      return { replyText: reply, intent: 'CAPTURE_DELIVERY_ADDRESS' as ValidatedIntent, confidence: 0.99, cartSummary: execution.cartSummary, shadowExecution: !!options?.shadowMode };
+      return { replyText: reply, intent: 'CAPTURE_DELIVERY_ADDRESS' as ValidatedIntent, confidence: 0.99, responseCategory: execution.success ? 'CHECKOUT_SUMMARY' : ((getCustomerResponseCategory(execution.errorCode, execution.error, execution.result) || 'ADDRESS_VALIDATION') as CustomerResponseCategory), cartSummary: execution.cartSummary, shadowExecution: !!options?.shadowMode };
     }
 
     if (/(?:where is (?:my )?order|order status|wein (?:el )?order|track(?:ing)? (?:my )?order|suivi.*commande)/iu.test(text)) {
@@ -478,7 +525,7 @@ export class GeminiService {
         await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
-      return { replyText: reply, intent: 'ORDER_STATUS' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
+      return { replyText: reply, intent: 'ORDER_STATUS' as ValidatedIntent, confidence: 0.99, responseCategory: execution.success ? 'NORMAL' : ((getCustomerResponseCategory(execution.errorCode, execution.error, result) || 'NO_ACTIVE_ORDER') as CustomerResponseCategory), shadowExecution: !!options?.shadowMode };
     }
 
     const currentActiveCart = await cartService.getActiveCartReadOnly(customer.id);
@@ -495,7 +542,7 @@ export class GeminiService {
         await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
-      return { replyText: reply, intent: 'CLEAR_CART' as ValidatedIntent, confidence: 0.99, cartSummary: null, shadowExecution: !!options?.shadowMode };
+      return { replyText: reply, intent: 'CLEAR_CART' as ValidatedIntent, confidence: 0.99, responseCategory: 'NORMAL', cartSummary: null, shadowExecution: !!options?.shadowMode };
     }
 
     // "New cart" is intentionally a confirmation flow when items exist. The
@@ -510,7 +557,7 @@ export class GeminiService {
         await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, state.lastAssistantQuestion);
       }
-      return { replyText: state.lastAssistantQuestion, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
+      return { replyText: state.lastAssistantQuestion, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, responseCategory: 'CLARIFICATION', shadowExecution: !!options?.shadowMode };
     }
 
     if (state.nextRequiredAction === 'CONFIRM_CART_CLEAR') {
@@ -532,7 +579,7 @@ export class GeminiService {
         await this.safeSaveState(customer.id, state, conversationId);
         await this.appendHistory(customer.id, conversationId, text, reply);
       }
-      return { replyText: reply, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, shadowExecution: !!options?.shadowMode };
+      return { replyText: reply, intent: 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, responseCategory: 'CLARIFICATION', shadowExecution: !!options?.shadowMode };
     }
 
     // A pending merchant switch owns simple approvals/rejections. Resolve it
@@ -556,7 +603,7 @@ export class GeminiService {
           await this.safeSaveState(customer.id, state, conversationId);
           await this.appendHistory(customer.id, conversationId, text, reply);
         }
-        return { replyText: reply, intent: approved ? 'ADD_TO_CART' as ValidatedIntent : 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, cartSummary: execution.cartSummary, shadowExecution: !!options?.shadowMode };
+        return { replyText: reply, intent: approved ? 'ADD_TO_CART' as ValidatedIntent : 'CLARIFICATION_REQUIRED' as ValidatedIntent, confidence: 0.99, responseCategory: approved ? 'NORMAL' : 'CLARIFICATION', cartSummary: execution.cartSummary, shadowExecution: !!options?.shadowMode };
       }
     }
 
@@ -607,6 +654,7 @@ export class GeminiService {
               confidence: 0.98,
               actionTaken: 'UPDATED_VARIANT',
               replyText: reply,
+              responseCategory: 'NORMAL',
               cartSummary: refreshedCart,
               shadowExecution: false,
             };
@@ -621,6 +669,7 @@ export class GeminiService {
               confidence: 0.98,
               actionTaken: 'UPDATED_VARIANT',
               replyText: reply,
+              responseCategory: 'NORMAL',
               shadowExecution: true,
             };
           }
@@ -660,7 +709,7 @@ export class GeminiService {
     let extraContextBlock: string | undefined;
     if (customer.id > 0) {
       try {
-        const prefs = await customerMemoryService.getPreferences(customer.id);
+        const prefs = await customerMemoryService.getPreferences(customer.id, { readOnly: !!options?.shadowMode });
         customerPreferencesText = customerMemoryService.formatPreferencesForPrompt(prefs);
         const compiled = await contextCompilerService.compileContext({
           customerId: customer.id,
@@ -671,8 +720,26 @@ export class GeminiService {
           promptVersion: PROMPT_VERSION,
           toolSchemaVersion: '2.0.0',
           behaviorContractVersion: BEHAVIOR_CONTRACT_VERSION,
+          readOnly: !!options?.shadowMode,
         });
-        extraContextBlock = compiled.promptContextBlock;
+        const recentTurns = compiled.recentRelevantTurns
+          .map((turn) => `${turn.role === 'user' ? 'Customer' : 'Assistant'}: ${turn.text}`)
+          .join('\n');
+        const durableFacts = [
+          compiled.summary.formattedText,
+          recentTurns ? `[RECENT DURABLE TURNS]\n${recentTurns}` : null,
+          compiled.facts.activeOrders.length > 0
+            ? `[VERIFIED ACTIVE ORDERS]\n${compiled.facts.activeOrders.map((order) => `${order.orderNumber}: ${order.status}`).join('\n')}`
+            : null,
+          compiled.facts.selectedAddress ? `[SELECTED ADDRESS]\n${compiled.facts.selectedAddress.label || ''}` : null,
+          compiled.facts.pendingBatch
+            ? `[PENDING MULTI-ORDER BATCH]\n${compiled.facts.pendingBatch.children.map((child: any) => `${child.index}. ${child.merchantName}: $${Number(child.total || 0).toFixed(2)} (${child.status})`).join('\n')}`
+            : null,
+          compiled.memorySuggestions.length > 0
+            ? `[UNCONFIRMED MEMORY SUGGESTIONS]\n${compiled.memorySuggestions.join('\n')}`
+            : null,
+        ].filter(Boolean).join('\n\n');
+        extraContextBlock = [compiled.promptContextBlock, durableFacts].filter(Boolean).join('\n\n');
       } catch (err: any) {
         console.warn('[Gemini Service] Context compilation warning:', err.message);
       }
@@ -910,7 +977,10 @@ export class GeminiService {
     }
     finalText = sanitizeCustomerOutput(finalText);
     state.lastAssistantQuestion = /[?؟]$/.test(finalText.trim()) ? finalText : state.lastAssistantQuestion;
-    state.historySummary = sanitizeCustomerOutput(`${text} -> ${finalText}`).slice(-1200);
+    const previousSummary = state.historySummary ? `${state.historySummary}\n` : '';
+    // Keep a bounded rolling summary so long conversations retain intent and
+    // corrections even after the short Redis replay window expires.
+    state.historySummary = sanitizeCustomerOutput(`${previousSummary}${text} -> ${finalText}`).slice(-4000);
 
     // Detect fallback intent from keywords if not resolved through tools
     const lower = text.toLowerCase();
@@ -931,6 +1001,15 @@ export class GeminiService {
     }
 
     const legacyIntent = toLegacyIntent(primaryIntent);
+    const responseCategory: CustomerResponseCategory = customerError
+      ? ((getCustomerResponseCategory(customerError.errorCode, customerError.errorMessage, customerError.result) || 'NORMAL') as CustomerResponseCategory)
+      : primaryIntent === 'CLARIFICATION' || primaryIntent === 'CONTINUE_PENDING_TASK'
+        ? 'CLARIFICATION'
+        : primaryIntent === 'ORDER_STATUS' && recordedToolResults.some((entry) => getCustomerResponseCategory(entry.errorCode, undefined, entry.result) === 'NO_ACTIVE_ORDER')
+          ? 'NO_ACTIVE_ORDER'
+          : primaryIntent === 'CONFIRM_ORDER'
+            ? 'CHECKOUT_SUMMARY'
+            : 'NORMAL';
     const totalTokens = promptTokensTotal + candidatesTokensTotal;
     const costUsd = calculateGeminiCost(promptTokensTotal, candidatesTokensTotal);
     const detectedLang = detectLanguage(text);
@@ -1029,22 +1108,34 @@ export class GeminiService {
       }).catch((err) => console.warn('[Gemini Service] Error recording outcome:', err.message));
 
       execute(
-        `INSERT INTO conversation_ai_events (public_id, conversation_id, turn_index, inbound_message_id, event_type, sanitized_payload_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+        `INSERT INTO conversation_ai_events (
+          public_id, conversation_id, turn_index, sequence_no, inbound_message_id,
+          request_id, event_type, state_version_before, state_version_after,
+          sanitized_payload_json, prompt_version, tool_schema_version, model_version, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
           randomUUID(),
           conversationId,
           state.turnIndex || 1,
+          recordedToolCalls.length + 1,
           options?.inboundMessageId || null,
+          requestId,
           'TURN_COMPLETED',
+          Number(stateBeforeSnapshot.stateVersion || 0),
+          Number(state.stateVersion || stateBeforeSnapshot.stateVersion || 0),
           JSON.stringify({
             rawInput: text,
             replyText: finalText,
             intent: primaryIntent,
+            responseCategory,
+            language: responseLanguage,
             toolCalls: recordedToolCalls,
             latencyMs: Date.now() - startTime,
             tokens: { prompt: promptTokensTotal, candidates: candidatesTokensTotal },
           }),
+          PROMPT_VERSION,
+          '2.0.0',
+          model,
         ]
       ).catch((err: any) => console.warn('[Gemini Service] Error recording ai event:', err.message));
     }
@@ -1053,6 +1144,7 @@ export class GeminiService {
       replyText: finalText,
       intent: legacyIntent as ValidatedIntent,
       confidence: 0.95,
+      responseCategory,
       actionTaken,
       cartSummary: activeCart,
       orderCreated,

@@ -29,6 +29,7 @@ interface ReplyOutboxPayload {
   conversationId: number;
   intent: string;
   source: 'AI' | 'SYSTEM_FALLBACK';
+  providerMessageId?: string;
 }
 
 function parseJson(value: any): any {
@@ -205,15 +206,42 @@ export class WhatsAppWorker {
     };
   }
 
+  private async getReplyOutboxForProviderMessage(providerMessageId: string): Promise<OutboxEventRow | null> {
+    if (!providerMessageId) return null;
+    const rows = await query<any[]>(
+      `SELECT id, aggregate_id, payload_json, retry_count
+       FROM outbox_events
+       WHERE aggregate_type = 'WHATSAPP_INBOUND'
+         AND event_type = 'WHATSAPP_AI_REPLY'
+         AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.providerMessageId')) = ?
+       ORDER BY id DESC LIMIT 1`,
+      [providerMessageId]
+    );
+    if (rows.length === 0) return null;
+    return {
+      id: Number(rows[0].id),
+      aggregate_id: Number(rows[0].aggregate_id),
+      payload_json: rows[0].payload_json,
+      retry_count: Number(rows[0].retry_count || 0),
+    };
+  }
+
   private async enqueueReply(eventId: number, payload: ReplyOutboxPayload): Promise<void> {
     const existing = await this.getReplyOutbox(eventId);
     if (existing) return;
-    await execute(
-      `INSERT INTO outbox_events
-       (public_id, aggregate_type, aggregate_id, event_type, payload_json, status, available_at)
-       VALUES (?, 'WHATSAPP_INBOUND', ?, 'WHATSAPP_AI_REPLY', ?, 'PENDING', NOW())`,
-      [uuidv4(), eventId, JSON.stringify(payload)]
-    );
+    try {
+      await execute(
+        `INSERT INTO outbox_events
+         (public_id, aggregate_type, aggregate_id, event_type, dedupe_key, payload_json, status, available_at)
+         VALUES (?, 'WHATSAPP_INBOUND', ?, 'WHATSAPP_AI_REPLY', ?, ?, 'PENDING', NOW())`,
+        [uuidv4(), eventId, `whatsapp_reply:${eventId}`, JSON.stringify(payload)]
+      );
+    } catch (error: any) {
+      // A concurrent worker may win the unique dedupe-key insert. The winning
+      // row is the canonical reply and should be delivered once.
+      if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === 1062) return;
+      throw error;
+    }
   }
 
   private async processInboundEvent(event: WebhookEventRow): Promise<void> {
@@ -225,6 +253,14 @@ export class WhatsAppWorker {
 
     const existingReply = await this.getReplyOutbox(event.id);
     if (existingReply) {
+      await whatsappService.markWebhookProcessed(event.id, 'PROCESSED');
+      return;
+    }
+    // Meta can redeliver the same provider message under a different webhook
+    // event envelope. Suppress a second AI turn if the canonical reply is
+    // already queued for that provider message.
+    const existingProviderReply = await this.getReplyOutboxForProviderMessage(event.provider_event_id);
+    if (existingProviderReply) {
       await whatsappService.markWebhookProcessed(event.id, 'PROCESSED');
       return;
     }
@@ -244,6 +280,7 @@ export class WhatsAppWorker {
         conversationId: draft.conversationId,
         intent: draft.intent,
         source: 'AI',
+        providerMessageId: draft.providerMessageId,
       });
       await whatsappService.markWebhookProcessed(event.id, 'PROCESSED');
     } catch (error: any) {
@@ -280,6 +317,7 @@ export class WhatsAppWorker {
           conversationId: persisted.conversationId,
           intent: 'SYSTEM_FALLBACK',
           source: 'SYSTEM_FALLBACK',
+          providerMessageId: event.provider_event_id,
         });
         await whatsappService.markWebhookProcessed(event.id, 'PROCESSED', message);
       } else {

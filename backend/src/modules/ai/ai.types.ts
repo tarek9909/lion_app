@@ -2,6 +2,19 @@ import { SearchResult } from '../catalog/catalog.service.js';
 import { ConversationStage } from './contract/behavior.contract.js';
 import { SupportedLanguage } from './contract/behavior.contract.js';
 
+export type CustomerResponseCategory =
+  | 'PRODUCT_MISS'
+  | 'CART_ITEM_MISS'
+  | 'VARIANT_MISS'
+  | 'ADDRESS_MISS'
+  | 'ADDRESS_VALIDATION'
+  | 'NO_ACTIVE_ORDER'
+  | 'ORDER_NUMBER_MISS'
+  | 'CLARIFICATION'
+  | 'MULTI_ORDER_PLAN'
+  | 'CHECKOUT_SUMMARY'
+  | 'NORMAL';
+
 export interface AIContextState {
   customerId: number;
   lastPresentedOptions: SearchResult[];
@@ -58,6 +71,8 @@ export interface AIProcessResult {
   replyText: string;
   intent: ValidatedIntent;
   confidence: number;
+  /** Typed customer-visible outcome used by telemetry/evaluation. */
+  responseCategory?: CustomerResponseCategory;
   actionTaken?: string;
   cartSummary?: any;
   orderCreated?: any;

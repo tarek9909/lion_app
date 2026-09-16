@@ -33,6 +33,21 @@ export async function ensureAILearningTables(): Promise<void> {
     // projection. The full value is also retained in state_json.
     await execute(`ALTER TABLE conversation_state MODIFY COLUMN pending_question TEXT NULL;`);
 
+    // Exactly-once reply enqueueing must be enforced by the database, not by
+    // a read-then-insert race between PM2 workers.
+    try {
+      await execute(`ALTER TABLE outbox_events ADD COLUMN dedupe_key VARCHAR(180) NULL;`);
+    } catch (err: any) {
+      if (err?.errno !== 1060 && err?.code !== 'ER_DUP_FIELDNAME') throw err;
+    }
+    try {
+      await execute(`ALTER TABLE outbox_events ADD UNIQUE KEY uq_outbox_events_dedupe_key (dedupe_key);`);
+    } catch (err: any) {
+      // Duplicate-key/index-exists errors are expected on an already migrated
+      // database; all other schema errors must fail startup.
+      if (![1061, 1831].includes(Number(err?.errno)) && err?.code !== 'ER_DUP_KEYNAME') throw err;
+    }
+
     // Cart and order services reference these tables/columns on every AI turn.
     // Keep the schema self-healing for existing deployments as well as fresh DBs.
     const { ensureOrderBatchSchema } = await import('./migrations/ensure-order-batch-schema.js');
@@ -55,6 +70,7 @@ export async function ensureAILearningTables(): Promise<void> {
         sanitized_model_response TEXT NOT NULL,
         detected_intent VARCHAR(60) NOT NULL DEFAULT 'UNKNOWN',
         tool_calls_json JSON NULL,
+        context_json JSON NULL,
         quality_score INT NOT NULL DEFAULT 0,
         conversion_status VARCHAR(40) NOT NULL DEFAULT 'NOT_CONVERTED',
         review_status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
@@ -71,6 +87,11 @@ export async function ensureAILearningTables(): Promise<void> {
         KEY idx_training_curation_cust (customer_id)
       ) ENGINE=InnoDB;
     `);
+    try {
+      await execute(`ALTER TABLE training_curation_queue ADD COLUMN context_json JSON NULL AFTER tool_calls_json;`);
+    } catch (err: any) {
+      if (err?.errno !== 1060 && err?.code !== 'ER_DUP_FIELDNAME') throw err;
+    }
 
     // 3. Harvest checkpoints
     await execute(`

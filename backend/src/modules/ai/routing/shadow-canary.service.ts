@@ -3,6 +3,7 @@ import { config, resolveAIRoutingConfig } from '../../../config/env.js';
 import { AIProcessResult } from '../ai.types.js';
 import { geminiService } from '../gemini.service.js';
 import { aiTelemetryService } from '../telemetry/ai-telemetry.service.js';
+import { loadConversationState, AIConversationState } from '../state/ai-state.types.js';
 
 export type RoutingMode = 'STABLE_ONLY' | 'SHADOW' | 'CANARY' | 'CANDIDATE_ONLY';
 
@@ -21,6 +22,7 @@ export interface ProviderProcessOptions {
   requestId?: string;
   conversationId?: number;
   modelEndpoint?: string;
+  stateSnapshot?: AIConversationState;
 }
 
 import { query, execute } from '../../../database/db.js';
@@ -43,6 +45,9 @@ export class ShadowCanaryRouter {
       );
       if (rows && rows.length > 0) {
         const r = rows[0];
+        if (config.nodeEnv === 'production' && (r.stable_provider !== 'gemini' || r.candidate_provider !== 'gemini')) {
+          throw new Error('Startup Error: persisted production AI routing is not Gemini-only. Refusing to load unsafe routing configuration.');
+        }
         this.config = {
           ...this.config,
           routingMode: (r.routing_mode as RoutingMode) || this.config.routingMode,
@@ -60,6 +65,9 @@ export class ShadowCanaryRouter {
   }
 
   async configure(newConfig: Partial<RoutingConfig>): Promise<void> {
+    if (config.nodeEnv === 'production' && (newConfig.stableProvider === 'smart_nlu' || newConfig.candidateProvider === 'smart_nlu')) {
+      throw new Error('Production AI routing is Gemini-only; Smart NLU cannot be configured.');
+    }
     this.config = { ...this.config, ...newConfig };
     console.log(
       `[AI Router] Configured mode: ${this.config.routingMode} (Canary: ${this.config.canaryPercentage}%, Stable: ${this.config.stableProvider}, Candidate: ${this.config.candidateProvider})`
@@ -202,12 +210,24 @@ export class ShadowCanaryRouter {
   }> {
     const effectiveRoutingMode = this.config.routingMode;
     const { candidateProvider, stableProvider } = this.config;
+    if (config.nodeEnv === 'production' && (stableProvider !== 'gemini' || candidateProvider !== 'gemini')) {
+      throw new Error('Production AI routing is Gemini-only; refusing a non-Gemini customer turn.');
+    }
     const requestId = options?.requestId || `req-${randomUUID()}`;
     const providerOptions: ProviderProcessOptions = {
       ...options,
       requestId,
       conversationId: options?.conversationId,
     };
+    let preTurnState: AIConversationState | undefined;
+    if (effectiveRoutingMode === 'SHADOW' && options?.conversationId && candidateProvider === 'gemini') {
+      try {
+        const rows = await query<any[]>(`SELECT customer_id FROM conversations WHERE id = ? LIMIT 1`, [options.conversationId]);
+        if (rows.length > 0) preTurnState = await loadConversationState(Number(rows[0].customer_id), options.conversationId);
+      } catch (err: any) {
+        console.warn('[AI Router] Could not capture pre-turn shadow snapshot:', err?.message || err);
+      }
+    }
 
     // 1. CANARY MODE
     if (effectiveRoutingMode === 'CANARY' && this.isCanaryEligible(phone)) {
@@ -285,7 +305,7 @@ export class ShadowCanaryRouter {
     } else {
       try {
         shadowRan = true;
-        this.executeShadow(phone, messageText, mediaType, liveResult, requestId, options?.conversationId).catch((err) => {
+        this.executeShadow(phone, messageText, mediaType, liveResult, requestId, options?.conversationId, preTurnState).catch((err) => {
           console.warn('[AI Router] Shadow execution error:', err?.message || err);
         });
       } catch (err) {
@@ -307,7 +327,8 @@ export class ShadowCanaryRouter {
     mediaType: any,
     liveResult: AIProcessResult,
     requestId: string,
-    conversationId?: number
+    conversationId?: number,
+    stateSnapshot?: AIConversationState
   ): Promise<AIProcessResult | null> {
     const startTime = Date.now();
     try {
@@ -317,6 +338,7 @@ export class ShadowCanaryRouter {
           shadowMode: true,
           requestId,
           conversationId,
+          stateSnapshot,
           modelEndpoint: this.config.candidateModelEndpoint,
         });
       }

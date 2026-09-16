@@ -87,7 +87,13 @@ export async function runDemoGapTests(): Promise<boolean> {
       'image'
     );
     assert(image.confidence >= 0.60 && image.confidence <= 0.85 && (image.candidates || []).length > 1, 'DG-008 image analysis returns multiple candidates at ambiguous confidence');
-    assert(imageReply.replyText.includes('Which one') && imageReply.replyText.includes('1.'), 'DG-008 asks the customer to choose among numbered image matches');
+    assert(
+      (imageReply.replyText.includes('Which one') || imageReply.replyText.includes('Ayya we7de')) &&
+        imageReply.replyText.includes('1.') &&
+        !imageReply.replyText.includes('*') &&
+        !imageReply.replyText.includes('#'),
+      'DG-008 asks the customer to choose among numbered image matches in the sender language'
+    );
 
     console.log(`\n🏁 DG-001–DG-008 Results: ${passed} Passed, ${failed} Failed`);
     return failed === 0;

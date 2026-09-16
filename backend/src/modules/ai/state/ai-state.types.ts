@@ -324,6 +324,26 @@ export async function saveConversationState(
 
   const payload = {
     ...state,
+    // Keep state JSON bounded and free of untrusted catalog blobs while
+    // retaining every field needed to resolve numbered follow-up answers.
+    lastPresentedOptions: (state.lastPresentedOptions || []).slice(0, 20).map((option: any) => ({
+      merchantProductId: Number(option.merchantProductId),
+      productId: Number(option.productId),
+      merchantId: Number(option.merchantId),
+      merchantBranchId: Number(option.merchantBranchId),
+      merchantName: String(option.merchantName || '').slice(0, 120),
+      merchantType: String(option.merchantType || '').slice(0, 40),
+      merchantRating: Number(option.merchantRating || 0),
+      productName: String(option.productName || '').slice(0, 160),
+      description: String(option.description || '').slice(0, 300),
+      basePrice: Number(option.basePrice || 0),
+      deliveryFee: Number(option.deliveryFee || 0),
+      estimatedMinutes: Number(option.estimatedMinutes || 0),
+      isAvailable: option.isAvailable !== false,
+      score: Number(option.score || 0),
+    })),
+    historySummary: state.historySummary ? String(state.historySummary).slice(-4000) : null,
+    lastAssistantQuestion: state.lastAssistantQuestion ? String(state.lastAssistantQuestion).slice(0, 4096) : null,
     selectedAddressId: state.selectedAddress?.id ?? null,
     selectedAddressLabel: state.selectedAddress?.label ?? null,
     selectedMerchantId: state.selectedMerchant?.id ?? null,
@@ -343,19 +363,32 @@ export async function saveConversationState(
       state.stateVersion = newVersion;
       payload.stateVersion = newVersion;
 
-      await execute(
-        `INSERT INTO conversation_state
-          (conversation_id, current_state, last_presented_options, pending_question, state_json, version_no)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          targetConversationId,
-          state.stage,
-          JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
-          state.lastAssistantQuestion || null,
-          JSON.stringify(payload),
-          newVersion,
-        ]
-      );
+      try {
+        await execute(
+          `INSERT INTO conversation_state
+            (conversation_id, current_state, last_presented_options, pending_question, state_json, version_no)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            targetConversationId,
+            state.stage,
+            JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
+            payload.lastAssistantQuestion || null,
+            JSON.stringify(payload),
+            newVersion,
+          ]
+        );
+      } catch (err: any) {
+        // Another worker may have inserted the first state between our read
+        // and insert. Re-run through the optimistic update path rather than
+        // dropping the turn or writing a stale snapshot.
+        if (err?.code !== 'ER_DUP_ENTRY' && Number(err?.errno) !== 1062) throw err;
+        const raced = await query<any[]>(`SELECT version_no FROM conversation_state WHERE conversation_id = ? LIMIT 1`, [targetConversationId]);
+        const racedVersion = Number(raced[0]?.version_no || 1);
+        return saveConversationState(customerId, state, targetConversationId, {
+          expectedVersion: racedVersion,
+          enforceCas: options?.enforceCas,
+        });
+      }
     } else {
       const currentDbVersion = Number(existing[0].version_no || 1);
       const shouldEnforceCas = options?.enforceCas ?? (options?.expectedVersion !== undefined);
@@ -381,7 +414,7 @@ export async function saveConversationState(
           ? [
               state.stage,
               JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
-              state.lastAssistantQuestion || null,
+              payload.lastAssistantQuestion || null,
               JSON.stringify(payload),
               newVersion,
               targetConversationId,
@@ -390,7 +423,7 @@ export async function saveConversationState(
           : [
               state.stage,
               JSON.stringify(sanitizeStateSnapshot(state).lastPresentedOptions),
-              state.lastAssistantQuestion || null,
+              payload.lastAssistantQuestion || null,
               JSON.stringify(payload),
               newVersion,
               targetConversationId,

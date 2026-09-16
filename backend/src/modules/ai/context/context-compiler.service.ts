@@ -6,6 +6,7 @@ import { customerMemoryService, CustomerMemoryPreferences } from '../memory/cust
 import { approvedCaseRetrieverService, ApprovedCase } from '../learning/approved-case-retriever.service.js';
 import { cartService } from '../../carts/cart.service.js';
 import { orderService } from '../../orders/order.service.js';
+import { orderBatchService } from '../../orders/order-batch.service.js';
 
 export interface AuthoritativeContext {
   conversation: {
@@ -61,6 +62,7 @@ export class ContextCompilerService {
     promptVersion?: string;
     toolSchemaVersion?: string;
     behaviorContractVersion?: string;
+    readOnly?: boolean;
   }): Promise<AuthoritativeContext> {
     const {
       customerId,
@@ -83,7 +85,8 @@ export class ContextCompilerService {
     // 2. Database truth for cart, address, orders
     let cartFacts: any = null;
     try {
-      const activeCart = await cartService.getOrCreateActiveCart(customerId);
+      // Compilation is read-only, including for shadow/canary candidate turns.
+      const activeCart = await cartService.getActiveCartReadOnly(customerId);
       if (activeCart) {
         cartFacts = {
           cartId: activeCart.id,
@@ -126,6 +129,17 @@ export class ContextCompilerService {
         }));
     } catch {}
 
+    let pendingBatch: any | null = null;
+    if (state.pendingOrderBatchId) {
+      try {
+        // Context compilation runs during shadow evaluation too; do not refresh
+        // quoted totals (a write) while merely reading the pending plan.
+        pendingBatch = await orderBatchService.getBatchSummary(Number(state.pendingOrderBatchId), { refreshQuotes: false });
+      } catch {
+        pendingBatch = null;
+      }
+    }
+
     // 3. Grounded incremental summary
     let summary: ConversationSummary | null = null;
     if (conversationId) {
@@ -136,7 +150,7 @@ export class ContextCompilerService {
     const recentRelevantTurns = await this.getDurableTurns(conversationId, customerId, 6);
 
     // 5. Customer memory: Strictly split confirmed preferences from suggestions
-    const prefs = await customerMemoryService.getPreferences(customerId);
+    const prefs = await customerMemoryService.getPreferences(customerId, { readOnly: options.readOnly });
     const confirmedMemory: string[] = [];
     const memorySuggestions: string[] = [];
 
@@ -213,7 +227,7 @@ export class ContextCompilerService {
         cart: cartFacts,
         selectedAddress: state.selectedAddress || null,
         activeOrders,
-        pendingBatch: null,
+        pendingBatch,
       },
       summary: {
         customerGoal: summary?.customerGoal || null,

@@ -378,8 +378,10 @@ export async function runGeminiIntegrationTests(): Promise<boolean> {
 
   const ambigRes = await geminiService.processCustomerMessage(TEST_PHONE, 'large');
   assert(
-    ambigRes.intent === 'CLARIFICATION_REQUIRED' && ambigRes.replyText.includes('Do you mean the Coke or the meal?'),
-    'Gemini asks for clarification instead of guessing when target item is ambiguous (meal vs coke)'
+    ambigRes.intent === 'CLARIFICATION_REQUIRED' &&
+      (ambigRes.replyText.includes('Do you mean the Coke or the meal?') || ambigRes.replyText.includes('2asdak el Coke aw el meal?')) &&
+      !ambigRes.replyText.includes('Baddak tetlob akel'),
+    'Gemini asks for a targeted, language-matched clarification instead of guessing (meal vs coke)'
   );
 
   // Clarification resolution: "the coke"

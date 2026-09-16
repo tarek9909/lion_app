@@ -881,6 +881,7 @@ CREATE TABLE training_curation_queue (
     sanitized_model_response TEXT NOT NULL,
     detected_intent VARCHAR(60) NOT NULL DEFAULT 'UNKNOWN',
     tool_calls_json JSON NULL,
+    context_json JSON NULL,
     quality_score INT NOT NULL DEFAULT 0,
     conversion_status VARCHAR(40) NOT NULL DEFAULT 'NOT_CONVERTED',
     review_status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
@@ -2191,6 +2192,7 @@ CREATE TABLE outbox_events (
     aggregate_id BIGINT UNSIGNED NOT NULL,
     event_type VARCHAR(120) NOT NULL,
     payload_json JSON NOT NULL,
+    dedupe_key VARCHAR(180) NULL,
     status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
     available_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     processed_at TIMESTAMP(3) NULL,
@@ -2199,6 +2201,7 @@ CREATE TABLE outbox_events (
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (id),
     UNIQUE KEY uq_outbox_events_public_id (public_id),
+    UNIQUE KEY uq_outbox_events_dedupe_key (dedupe_key),
     KEY idx_outbox_events_status (status, available_at)
 ) ENGINE=InnoDB;
 
