@@ -6,6 +6,8 @@ import { geminiService } from '../modules/ai/gemini.service.js';
 import { config } from '../config/env.js';
 
 export async function runApiTests(): Promise<boolean> {
+  const previousNodeEnv = config.nodeEnv;
+  config.nodeEnv = 'test';
   console.log('\n🧪 Starting Lion Delivery HTTP API Integration Tests (Step 9 & 10)...');
   await resetDemo();
 
@@ -211,7 +213,20 @@ export async function runApiTests(): Promise<boolean> {
     const c2Data: any = await c2Login.json();
     const c2Token = c2Data.data?.token;
 
-    // 11b. Valid Driver 1 and Customer 1 can access Order 1
+    // The seed orders are historical deliveries, whose relay channels are
+    // intentionally closed. Convert this isolated fixture into an active
+    // assigned delivery before testing the private relay authorization path.
+    await execute(`
+      UPDATE orders SET status = 'DRIVER_ASSIGNED', driver_id = 1, delivered_at = NULL, completed_at = NULL
+      WHERE id = 1
+    `);
+    await execute(`
+      UPDATE delivery_channels
+         SET driver_id = 1, status = 'OPEN', expires_at = NULL, closed_at = NULL, closed_reason = NULL
+       WHERE order_id = 1
+    `);
+
+    // 11b. Valid Driver 1 and Customer 1 can access the active relay channel
     const d1SendRes = await fetch(`${baseUrl}/api/relay/1/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${d1Token}` },
@@ -338,6 +353,7 @@ export async function runApiTests(): Promise<boolean> {
 
   } finally {
     server.close();
+    config.nodeEnv = previousNodeEnv;
   }
 
   console.log(`\n🏁 HTTP API Test Results: ${passed} Passed, ${failed} Failed`);

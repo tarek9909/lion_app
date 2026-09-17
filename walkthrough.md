@@ -1,6 +1,6 @@
 # Lion Delivery Demo Readiness Walkthrough
 
-Updated: 2026-09-15
+Updated: 2026-09-18
 
 ## Readiness decision
 
@@ -79,7 +79,7 @@ Run from the repository root:
 | Provider/routing configuration matrix | `npm --prefix backend run test:config-matrix` | Passed |
 | AI edge-case regression suite | `npm --prefix backend run test:ai-edgecases` | Passed; 31/31 |
 | Full HTTP/WebSocket rehearsal | `npm --prefix backend run test:rehearsal` | Passed; 3 consecutive runs |
-| AI training and audit runner | `npm --prefix backend run test:ai-plan` | Passed; 12/12 suites in disposable MySQL and Redis DB 15 |
+| AI training and audit runner | `npm --prefix backend run test:ai-plan` | Passed; 13/13 suites in disposable MySQL and Redis DB 15 |
 | Full integration runner | `npm --prefix backend run test:all` | Passed; 15/15 suites in disposable MySQL and Redis DB 15 |
 
 Both master runners create a validated disposable database named `lion_delivery_test_<pid>_<timestamp>`, use Redis DB 15, seed it, and remove it in `finally`. They do not use or leave customer data in the shared demo database.
@@ -100,3 +100,23 @@ The deployed server verification on 2026-09-15 confirmed HTTP 200 health with My
 For a Meta test-number inbound rehearsal, add the tester's WhatsApp number to Meta's authorized test recipients and send a normal WhatsApp message to the test number. The Meta dashboard's **Send a message** control is outbound-only; it cannot create the inbound customer event. Error `131030` means the recipient is not authorized by Meta and must be added in Meta before Lion can deliver a reply.
 
 Real Meta media download, real Whisper transcription, live vision-provider output, and human approval of synthetic training examples remain separate provider-verification tasks.
+
+## 2026-09-18 implementation verification
+
+The remaining autonomous-operation hardening was completed and verified locally:
+
+- Inbound WhatsApp turns are durable and replay-safe: completed replies are reused after duplicate/recovered inbound events, while mutating tool calls use durable pre-claimed receipts before a business side effect.
+- AI turn payloads and mutation receipts are PII-redacted before persistence. Existing legacy conversation-state rows without serialized state are safely loaded with their real version, preserving optimistic-concurrency correctness.
+- WebSocket connections require a JWT through the negotiated protocol; the dashboard establishes its operator session before connecting. Tokens are not accepted in a WebSocket URL.
+- Driver transitions now enforce the authenticated driver assignment inside transactions. Relay channels require an assigned driver, deny messages once closed, and automatically lock 30 minutes after delivery.
+- The master test runner now switches the active database pool to its disposable MySQL database and restores it afterward, so its test assertions no longer touch the shared demo database.
+
+Verification completed on this revision:
+
+```bash
+npm test                         # 15/15 suites passed, zero failures
+npm --prefix backend run test:ai-plan  # 13/13 suites passed
+npm --prefix backend run test:rehearsal # three consecutive HTTP/WebSocket runs passed
+```
+
+This verifies the local implementation in `WHATSAPP_MODE=MOCK` and `MEDIA_MODE=FIXTURE`. It is not a claim that a real Gemini key, Meta recipient authorization, Whisper, or vision provider has been verified in this local environment.

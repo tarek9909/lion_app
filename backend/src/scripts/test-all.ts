@@ -1,4 +1,6 @@
 import { createIsolatedDatabase, dropIsolatedDatabase, isolatedRedisUrl } from './test-isolation.js';
+import { switchDatabase } from '../database/db.js';
+import { config } from '../config/env.js';
 
 async function runAllSuites() {
   const [
@@ -158,12 +160,18 @@ async function runAllSuites() {
 
 async function main() {
   let databaseName: string | undefined;
+  const originalDatabase = config.db.database;
+  const originalNodeEnv = config.nodeEnv;
   let exitCode = 1;
   try {
     databaseName = await createIsolatedDatabase();
     process.env.NODE_ENV = 'test';
     process.env.DB_NAME = databaseName;
     process.env.REDIS_URL = isolatedRedisUrl();
+    config.nodeEnv = 'test';
+    // The shared pool is initialized during module loading. Point it at the
+    // disposable database before any suite can reset, seed, or query data.
+    await switchDatabase(databaseName);
     const { seedDemoData } = await import('./seed-demo.js');
     await seedDemoData();
     exitCode = (await runAllSuites()) ? 0 : 1;
@@ -171,9 +179,11 @@ async function main() {
     console.error('Fatal isolated test runner error:', err);
   } finally {
     if (databaseName) {
+      await switchDatabase(originalDatabase);
       await dropIsolatedDatabase(databaseName);
       console.log('Removed isolated test database ' + databaseName);
     }
+    config.nodeEnv = originalNodeEnv;
   }
   process.exit(exitCode);
 }

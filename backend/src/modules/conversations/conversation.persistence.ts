@@ -16,6 +16,14 @@ export interface PersistedInboundMessage {
   inserted: boolean;
 }
 
+/** A completed customer-turn reply stored in the append-only AI event log. */
+export interface CompletedInboundAiTurn {
+  replyText: string;
+  intent: string;
+  responseCategory?: string;
+  actionTaken?: string;
+}
+
 /**
  * Persist an inbound WhatsApp message exactly once. The provider message ID
  * is backed by the database unique key, so worker retries cannot duplicate
@@ -155,12 +163,15 @@ export async function persistInboundMessage(
   }
 
   await execute(`UPDATE conversations SET last_message_at = NOW() WHERE id = ?`, [conversationId]);
+  // conversation_state has no last_intent column. Do not hide a schema error
+  // here; otherwise an inbound turn can appear persisted without a durable
+  // conversation-state row.
   await execute(
-    `INSERT INTO conversation_state (conversation_id, current_state, last_intent)
-     VALUES (?, 'ACTIVE', ?)
-     ON DUPLICATE KEY UPDATE current_state='ACTIVE', last_intent=VALUES(last_intent)`,
-    [conversationId, options?.intent || 'GENERAL']
-  ).catch(() => undefined);
+    `INSERT INTO conversation_state (conversation_id, current_state)
+     VALUES (?, 'ACTIVE')
+     ON DUPLICATE KEY UPDATE current_state='ACTIVE'`,
+    [conversationId]
+  );
 
   return { customerId, conversationId, messageId, inserted: true };
 }
@@ -172,4 +183,37 @@ export async function getConversationAiMode(conversationId: number): Promise<str
 
 export async function setConversationAiMode(conversationId: number, mode: 'AI' | 'HUMAN'): Promise<void> {
   await execute(`UPDATE conversations SET ai_mode = ? WHERE id = ?`, [mode, conversationId]);
+}
+
+export async function loadCompletedInboundAiTurn(
+  inboundMessageId: number,
+): Promise<CompletedInboundAiTurn | null> {
+  const rows = await query<any[]>(
+    `SELECT sanitized_payload_json
+       FROM conversation_ai_events
+      WHERE inbound_message_id = ?
+        AND event_type = 'TURN_COMPLETED'
+      ORDER BY id DESC
+      LIMIT 1`,
+    [inboundMessageId],
+  );
+  if (rows.length === 0 || !rows[0]?.sanitized_payload_json) return null;
+
+  try {
+    const raw = rows[0].sanitized_payload_json;
+    const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const replyText = typeof payload?.replyText === 'string' ? payload.replyText.trim() : '';
+    const intent = typeof payload?.intent === 'string' ? payload.intent : 'GENERAL_GREETING';
+    if (!replyText) return null;
+    return {
+      replyText,
+      intent,
+      responseCategory: typeof payload?.responseCategory === 'string' ? payload.responseCategory : undefined,
+      actionTaken: typeof payload?.actionTaken === 'string' ? payload.actionTaken : undefined,
+    };
+  } catch (error: any) {
+    // A malformed receipt is never a reason to repeat a customer mutation.
+    console.warn('[Conversation Storage] Invalid completed AI turn receipt:', error?.message || error);
+    return null;
+  }
 }

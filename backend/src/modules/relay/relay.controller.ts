@@ -23,6 +23,10 @@ export async function getRelayMessages(req: Request, res: Response) {
       orderDriver = ord[0].driver_id;
     }
 
+    if (channel && !relayService.isChannelOpen(channel)) {
+      return sendError(res, 'This private relay channel is closed', 403);
+    }
+
     // Role-based channel access validation: prevent drivers/customers from reading unrelated orders
     if (user.role === 'DRIVER') {
       if (!user.driverId || user.driverId !== orderDriver) {
@@ -64,6 +68,10 @@ export async function sendRelayMessage(req: Request, res: Response) {
       if (ord.length === 0) return sendError(res, 'Order not found', 404);
       orderCustomer = ord[0].customer_id;
       orderDriver = ord[0].driver_id;
+    }
+
+    if (channel && !relayService.isChannelOpen(channel)) {
+      return sendError(res, 'This private relay channel is closed', 403);
     }
 
     let senderRole: 'CUSTOMER' | 'DRIVER' | 'SYSTEM';

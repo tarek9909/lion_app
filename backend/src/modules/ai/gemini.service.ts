@@ -51,6 +51,7 @@ import { outcomeObserverService } from './learning/outcome-observer.service.js';
 import { StateVersionConflictError } from './state/ai-state.types.js';
 import { validateStructuredDecision } from './planning/decision.schema.js';
 import { actionPolicyService } from './policy/action-policy.service.js';
+import { PiiRedactor } from './telemetry/pii-redactor.js';
 
 export function detectLanguage(text: string): string {
   return detectSenderLanguage(text);
@@ -338,48 +339,113 @@ export class GeminiService {
       ? `msg_${inboundMessageId}_${toolName}`
       : null;
 
+    let receiptClaimed = false;
+
     if (conversationId && idempotencyKey && !options?.shadowMode) {
-      try {
+      const loadExistingReceipt = async (): Promise<ToolExecutionResult | null> => {
         const rows = await query<any[]>(
-          `SELECT response_payload FROM conversation_mutation_receipts WHERE conversation_id = ? AND idempotency_key = ? LIMIT 1`,
-          [conversationId, idempotencyKey]
+          `SELECT action_status, response_payload
+             FROM conversation_mutation_receipts
+            WHERE conversation_id = ? AND idempotency_key = ?
+            LIMIT 1`,
+          [conversationId, idempotencyKey],
         );
-        if (rows && rows.length > 0) {
-          const cached = JSON.parse(rows[0].response_payload);
-          return cached;
+        if (rows.length === 0) return null;
+
+        const stored = rows[0];
+        if (stored.response_payload) {
+          try {
+            return (typeof stored.response_payload === 'string'
+              ? JSON.parse(stored.response_payload)
+              : stored.response_payload) as ToolExecutionResult;
+          } catch {
+            return {
+              toolName,
+              success: false,
+              error: 'The previous action receipt could not be read safely.',
+              errorCode: 'MUTATION_RECEIPT_INVALID',
+              stateChanged: false,
+            };
+          }
         }
+
+        // A process can crash after a business operation starts. Never repeat
+        // that mutation until an operator/reconciler can prove its outcome.
+        return {
+          toolName,
+          success: false,
+          error: 'The previous action is still being reconciled. No action was repeated.',
+          errorCode: 'MUTATION_RECONCILIATION_REQUIRED',
+          stateChanged: false,
+        };
+      };
+
+      const existing = await loadExistingReceipt();
+      if (existing) return existing;
+
+      try {
+        await execute(
+          `INSERT INTO conversation_mutation_receipts
+            (conversation_id, idempotency_key, action_name, tool_name, action_status, request_payload, created_at)
+           VALUES (?, ?, ?, ?, 'PENDING', ?, NOW())`,
+          [conversationId, idempotencyKey, toolName, toolName, JSON.stringify(PiiRedactor.redactObject(args || {}))],
+        );
+        receiptClaimed = true;
       } catch (err: any) {
-        console.warn('[Gemini Service] Idempotency receipt check warning:', err.message);
+        if (err?.code !== 'ER_DUP_ENTRY' && Number(err?.errno) !== 1062) throw err;
+        const raced = await loadExistingReceipt();
+        if (raced) return raced;
+        throw err;
       }
     }
 
-    const execution = await aiToolsExecutor.executeTool(
-      toolName,
-      args,
-      customerId,
-      state,
-      mutationCountThisTurn,
-      options,
-      userMessage
-    );
-
-    if (conversationId && idempotencyKey && execution.success && !options?.shadowMode) {
-      try {
+    let execution: ToolExecutionResult;
+    try {
+      execution = await aiToolsExecutor.executeTool(
+        toolName,
+        args,
+        customerId,
+        state,
+        mutationCountThisTurn,
+        options,
+        userMessage,
+      );
+    } catch (error) {
+      if (receiptClaimed && conversationId && idempotencyKey) {
         await execute(
-          `INSERT INTO conversation_mutation_receipts (conversation_id, idempotency_key, action_name, request_payload, response_payload, created_at)
-           VALUES (?, ?, ?, ?, ?, NOW())
-           ON DUPLICATE KEY UPDATE response_payload = VALUES(response_payload)`,
+          `UPDATE conversation_mutation_receipts
+              SET action_status = 'FAILED', response_payload = ?
+            WHERE conversation_id = ? AND idempotency_key = ?`,
           [
+            JSON.stringify({
+              toolName,
+              success: false,
+              error: 'The requested action could not be completed safely.',
+              errorCode: 'MUTATION_EXECUTION_FAILED',
+              stateChanged: false,
+            }),
             conversationId,
             idempotencyKey,
-            toolName,
-            JSON.stringify(args || {}),
-            JSON.stringify(execution),
-          ]
-        );
-      } catch (err: any) {
-        console.warn('[Gemini Service] Receipt storage warning:', err.message);
+          ],
+        ).catch(() => undefined);
       }
+      throw error;
+    }
+
+    if (receiptClaimed && conversationId && idempotencyKey) {
+      // A mutation is not reported as complete until the durable receipt is
+      // written. A failed receipt leaves PENDING, which fails closed on retry.
+      await execute(
+        `UPDATE conversation_mutation_receipts
+            SET action_status = ?, response_payload = ?
+          WHERE conversation_id = ? AND idempotency_key = ?`,
+        [
+          execution.success ? 'SUCCESS' : 'REJECTED',
+          JSON.stringify(PiiRedactor.redactObject(execution)),
+          conversationId,
+          idempotencyKey,
+        ],
+      );
     }
 
     return execution;
@@ -549,10 +615,12 @@ export class GeminiService {
       const result: any = execution.result || {};
       const reply = execution.success
         ? sanitizeCustomerOutput(responseLanguage === 'arabizi'
-          ? `📦 Talabak #${result.order_number} men ${result.merchant_name || 'Chicken House'} hal2ad 7alto ${result.status}.`
+          ? `Talabak ${result.order_number} ${result.merchant_name ? `men ${result.merchant_name} ` : ''}hal2ad 7alto ${result.status}.`
           : responseLanguage === 'fr'
-            ? `📦 Votre commande #${result.order_number} de ${result.merchant_name || 'Chicken House'} est actuellement ${result.status}.`
-            : `📦 Your order #${result.order_number} from ${result.merchant_name || 'Chicken House'} is currently ${result.status}.`)
+            ? `Votre commande ${result.order_number}${result.merchant_name ? ` de ${result.merchant_name}` : ''} est actuellement ${result.status}.`
+            : responseLanguage === 'ar' || responseLanguage === 'ar_lb'
+              ? `طلبك ${result.order_number}${result.merchant_name ? ` من ${result.merchant_name}` : ''} حالته الآن ${result.status}.`
+              : `Your order ${result.order_number}${result.merchant_name ? ` from ${result.merchant_name}` : ''} is currently ${result.status}.`)
         : dispatchCustomerError({ errorCode: execution.errorCode, errorMessage: execution.error, result, language: responseLanguage, facts: this.errorFacts(result) })?.text || getLanguageSafeFallback(responseLanguage);
       if (!options?.shadowMode && customer.id > 0) {
         await this.safeSaveState(customer.id, state, conversationId);
@@ -1179,7 +1247,7 @@ export class GeminiService {
         },
       }).catch((err) => console.warn('[Gemini Service] Error recording outcome:', err.message));
 
-      execute(
+      await execute(
         `INSERT INTO conversation_ai_events (
           public_id, conversation_id, turn_index, sequence_no, inbound_message_id,
           request_id, event_type, state_version_before, state_version_after,
@@ -1195,21 +1263,22 @@ export class GeminiService {
           'TURN_COMPLETED',
           Number(stateBeforeSnapshot.stateVersion || 0),
           Number(state.stateVersion || stateBeforeSnapshot.stateVersion || 0),
-          JSON.stringify({
-            rawInput: text,
+          JSON.stringify(PiiRedactor.redactObject({
+            customerMessage: text,
             replyText: finalText,
             intent: primaryIntent,
             responseCategory,
+            actionTaken: actionTaken || null,
             language: responseLanguage,
             toolCalls: recordedToolCalls,
             latencyMs: Date.now() - startTime,
             tokens: { prompt: promptTokensTotal, candidates: candidatesTokensTotal },
-          }),
+          })),
           PROMPT_VERSION,
           '2.0.0',
           model,
         ]
-      ).catch((err: any) => console.warn('[Gemini Service] Error recording ai event:', err.message));
+      );
     }
 
     return {

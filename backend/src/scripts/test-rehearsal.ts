@@ -5,6 +5,7 @@ import { WebSocket } from 'ws';
 import { app } from '../app.js';
 import { initWebSocketServer } from '../services/websocket.js';
 import { testDbConnection } from '../database/db.js';
+import { config } from '../config/env.js';
 
 const DEMO_PHONE = '96170123456';
 const LOG_FILE = path.resolve(process.cwd(), 'test-e2e-rehearsal.log');
@@ -102,30 +103,10 @@ export async function runFullDemoRehearsalOnce(runNumber: number): Promise<boole
 
   const { wsUrl } = await startServerIfNeeded();
 
-  // 1. Establish Live WebSocket Connection
+  // Authenticate before the WebSocket upgrade. Browser WebSockets use the
+  // Sec-WebSocket-Protocol header because they cannot set Authorization.
   const wsEvents: { type: string; payload: any; timestamp: string }[] = [];
-  const ws = new WebSocket(wsUrl);
-
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('WebSocket connection timed out')), 4000);
-    ws.on('open', () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    ws.on('error', (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-  });
-
-  ws.on('message', (raw) => {
-    try {
-      const parsed = JSON.parse(raw.toString());
-      wsEvents.push(parsed);
-    } catch {
-      // ignore
-    }
-  });
+  let ws: WebSocket | null = null;
 
   const waitForWsEvent = async (eventType: string, timeoutMs = 3000): Promise<any> => {
     const start = Date.now();
@@ -160,6 +141,26 @@ export async function runFullDemoRehearsalOnce(runNumber: number): Promise<boole
     });
     const customer1Token = customer1Login.data.token;
     logLine(`   ✅ Customer 1 authenticated (CustomerId: ${customer1Login.data.user.customerId})`);
+
+    ws = new WebSocket(wsUrl, ['lion-auth', adminToken]);
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Authenticated WebSocket connection timed out')), 4000);
+      ws!.on('open', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      ws!.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+    ws.on('message', (raw) => {
+      try {
+        wsEvents.push(JSON.parse(raw.toString()));
+      } catch {
+        // Ignore non-JSON frames.
+      }
+    });
 
     // 3. Demo Reset via Authenticated HTTP Endpoint (G-055)
     logLine('\n🔄 Step 2: Executing Demo State Reset via HTTP (POST /api/demo/reset)...');
@@ -487,13 +488,15 @@ export async function runFullDemoRehearsalOnce(runNumber: number): Promise<boole
     logLine(`\n🎉 Rehearsal Run #${runNumber} (Full HTTP + WS Flow) PASSED 100% CLEANLY!\n`);
     return true;
   } finally {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws?.readyState === WebSocket.OPEN) {
       ws.close();
     }
   }
 }
 
 export async function runConsecutiveRehearsals(times: number = 3): Promise<boolean> {
+  const previousNodeEnv = config.nodeEnv;
+  config.nodeEnv = 'test';
   logLine(`════════════════════════════════════════════════════════════`);
   logLine(`🦁 LION DELIVERY FULL HTTP/WS E2E REHEARSAL (${times} RUNS)`);
   logLine(`════════════════════════════════════════════════════════════`);
@@ -514,6 +517,7 @@ export async function runConsecutiveRehearsals(times: number = 3): Promise<boole
     return true;
   } finally {
     await stopServerIfRunning();
+    config.nodeEnv = previousNodeEnv;
   }
 }
 

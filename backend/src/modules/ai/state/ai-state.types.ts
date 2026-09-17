@@ -272,6 +272,14 @@ export async function loadConversationState(customerId: number, conversationId?:
         parsed.stateVersion = Number(rows[0].version_no || parsed.stateVersion || 1);
         return normalizeLoadedState(parsed, customerId, conversationId);
       }
+      if (rows.length > 0) {
+        // Inbound persistence creates the durable state row before the first
+        // AI turn. That row has no JSON snapshot yet, but its version is
+        // still authoritative for the first compare-and-swap update.
+        const initial = createInitialState(customerId, 'arabizi', conversationId);
+        initial.stateVersion = Number(rows[0].version_no || 1);
+        return initial;
+      }
     } catch (err) {
       console.warn('[AI State] Error reading durable conversation state:', err);
     }

@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { aiService } from '../ai/ai.service.js';
 import { sanitizeCustomerOutput } from '../ai/customer-output.js';
 import { sendSuccess, sendError } from '../../shared/response.js';
-import { query, execute } from '../../database/db.js';
+import { query } from '../../database/db.js';
 import { config } from '../../config/env.js';
 import { broadcastEvent } from '../../services/websocket.js';
 import { whatsappService } from '../whatsapp/whatsapp.service.js';
@@ -132,11 +132,8 @@ export async function simulateWhatsAppMessage(req: Request, res: Response) {
     const result = await aiService.processCustomerMessage(userPhone, processedMessage, mediaType, {
       conversationId: persisted.conversationId,
       requestId: `sim-${persisted.messageId}`,
+      inboundMessageId: persisted.messageId,
     });
-    await execute(
-      `UPDATE conversation_state SET last_intent = ? WHERE conversation_id = ?`,
-      [result.intent, persisted.conversationId]
-    ).catch(() => undefined);
 
     // Send outbound reply through provider client (G-016)
     const customerReply = sanitizeCustomerOutput(result.replyText);

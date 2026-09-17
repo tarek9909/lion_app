@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import { app } from '../app.js';
 import { initWebSocketServer, broadcastEvent } from '../services/websocket.js';
 import { resetDemo } from './reset-demo.js';
+import { signToken } from '../modules/auth/auth.service.js';
 
 export async function runWebSocketTests(): Promise<boolean> {
   console.log('\n🧪 Starting WebSocket Real-Time Event Integration Tests (Step 3 & 10)...');
@@ -28,7 +29,13 @@ export async function runWebSocketTests(): Promise<boolean> {
     }
   };
 
-  const wsClient = new WebSocket(wsUrl);
+  const token = signToken({
+    userId: 1,
+    publicId: '00000000-0000-4000-8000-000000000001',
+    email: 'ws-test@liondelivery.com',
+    role: 'SUPERADMIN',
+  });
+  const wsClient = new WebSocket(wsUrl, ['lion-auth', token]);
 
   try {
     // 1. Connection establishment

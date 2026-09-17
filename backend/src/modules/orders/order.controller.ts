@@ -1,7 +1,18 @@
 import { Request, Response } from 'express';
 import { orderService } from './order.service.js';
-import { sendSuccess, sendError } from '../../shared/response.js';
+import { AppError, sendSuccess, sendError } from '../../shared/response.js';
 import { query } from '../../database/db.js';
+
+function resolvedDriverId(req: Request, suppliedDriverId?: number): number | undefined {
+  if (req.user?.role !== 'DRIVER') return suppliedDriverId;
+  if (!req.user.driverId) {
+    throw new AppError('The authenticated driver account is not linked to a driver profile.', 403, 'DRIVER_IDENTITY_MISSING');
+  }
+  if (suppliedDriverId && suppliedDriverId !== req.user.driverId) {
+    throw new AppError('A driver may only act on their own delivery offer.', 403, 'DRIVER_ACTOR_MISMATCH');
+  }
+  return req.user.driverId;
+}
 
 export async function getLiveOrders(req: Request, res: Response) {
   try {
@@ -59,7 +70,8 @@ export async function driverAcceptOrder(req: Request, res: Response) {
   try {
     const orderId = parseInt(req.params.id, 10);
     const { driverId } = req.body;
-    const updated = await orderService.driverAccept(orderId, driverId);
+    const actingDriverId = resolvedDriverId(req, driverId);
+    const updated = await orderService.driverAccept(orderId, actingDriverId, req.user?.role === 'DRIVER' ? actingDriverId : undefined);
     return sendSuccess(res, updated);
   } catch (error: any) {
     return sendError(res, error);
@@ -70,7 +82,8 @@ export async function driverRejectOrder(req: Request, res: Response) {
   try {
     const orderId = parseInt(req.params.id, 10);
     const { driverId, reason } = req.body;
-    const updated = await orderService.driverReject(orderId, driverId, reason);
+    const actingDriverId = resolvedDriverId(req, driverId);
+    const updated = await orderService.driverReject(orderId, actingDriverId, reason, req.user?.role === 'DRIVER' ? actingDriverId : undefined);
     return sendSuccess(res, updated);
   } catch (error: any) {
     return sendError(res, error);
@@ -80,7 +93,7 @@ export async function driverRejectOrder(req: Request, res: Response) {
 export async function driverPickupOrder(req: Request, res: Response) {
   try {
     const orderId = parseInt(req.params.id, 10);
-    const updated = await orderService.driverPickup(orderId);
+    const updated = await orderService.driverPickup(orderId, req.user?.role === 'DRIVER' ? resolvedDriverId(req) : undefined);
     return sendSuccess(res, updated);
   } catch (error: any) {
     return sendError(res, error);
@@ -91,7 +104,7 @@ export async function driverDeliverOrder(req: Request, res: Response) {
   try {
     const orderId = parseInt(req.params.id, 10);
     const { rating, comment } = req.body;
-    const updated = await orderService.driverDeliver(orderId, rating, comment);
+    const updated = await orderService.driverDeliver(orderId, rating, comment, req.user?.role === 'DRIVER' ? resolvedDriverId(req) : undefined);
     return sendSuccess(res, updated);
   } catch (error: any) {
     return sendError(res, error);

@@ -26,9 +26,13 @@ export const App: React.FC = () => {
   };
 
   useEffect(() => {
-    api.login().catch(console.error);
+    let cancelled = false;
+    void api.login()
+      .then((loggedIn) => {
+        if (!cancelled && loggedIn) wsClient.connect();
+      })
+      .catch(console.error);
 
-    wsClient.connect();
     const unsubscribeConnection = wsClient.onConnectionChange(setIsConnected);
     const unsubscribeEvents = wsClient.subscribe((event) => {
       if (event.type === 'ORDER_CREATED') {
@@ -39,6 +43,7 @@ export const App: React.FC = () => {
     });
 
     return () => {
+      cancelled = true;
       unsubscribeConnection();
       unsubscribeEvents();
     };

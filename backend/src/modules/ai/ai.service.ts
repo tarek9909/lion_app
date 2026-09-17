@@ -690,7 +690,6 @@ Reply **"confirm"** to place your order!`,
         };
       }
 
-      const merchantName = state.selectedMerchantName || 'Chicken House';
       const results = await catalogService.searchProducts('crispy chicken');
 
       if (results.length === 0) {
@@ -701,12 +700,15 @@ Reply **"confirm"** to place your order!`,
         };
       }
 
+      const match = results[0];
+      const merchantName = state.selectedMerchantName || match.merchantName;
+      const itemPrice = Number(match.basePrice).toFixed(2);
       return {
         intent: 'IMAGE_SEARCH',
         confidence: 0.92,
         replyText: `Yes! **${merchantName}** has this item:
-🍽️ **Crispy Chicken Meal** — $10.50
-(Golden crispy chicken tenders with seasoned fries, garlic sauce, and coleslaw).
+🍽️ **${match.productName}** — $${itemPrice}
+(${match.description || 'Catalog item found'}).
 
 Would you like me to add it to your cart?`,
       };

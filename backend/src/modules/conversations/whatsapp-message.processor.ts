@@ -4,6 +4,7 @@ import { mediaService } from '../media/media.service.js';
 import { broadcastEvent } from '../../services/websocket.js';
 import {
   getConversationAiMode,
+  loadCompletedInboundAiTurn,
   persistInboundMessage,
   setConversationAiMode,
 } from './conversation.persistence.js';
@@ -175,6 +176,28 @@ export async function processInboundWhatsAppMessage(message: any, providerMessag
     transcript: normalized.mediaTranscript,
     providerMessageId: normalized.providerMessageId,
   });
+
+  // A worker can restart after completing the AI/tool turn but before its
+  // outbox row is written. Reuse the durable result instead of asking Gemini
+  // again and risking a repeated customer mutation.
+  if (!persisted.inserted) {
+    const completedTurn = await loadCompletedInboundAiTurn(persisted.messageId);
+    if (completedTurn) {
+      return {
+        phone: normalized.phone,
+        conversationId: persisted.conversationId,
+        inboundMessageId: persisted.messageId,
+        providerMessageId: normalized.providerMessageId,
+        processedText: normalized.processedText,
+        mediaType: normalized.mediaType,
+        mediaUrl: normalized.mediaUrl,
+        mediaTranscript: normalized.mediaTranscript,
+        replyText: sanitizeCustomerOutput(completedTurn.replyText),
+        intent: completedTurn.intent,
+        actionTaken: completedTurn.actionTaken,
+      };
+    }
+  }
 
   broadcastEvent('CONVERSATION_MESSAGE', {
     eventId: normalized.providerMessageId,

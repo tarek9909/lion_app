@@ -7,6 +7,7 @@ import { whatsappService } from '../whatsapp/whatsapp.service.js';
 import { config } from '../../config/env.js';
 import { convertUsdToLbp } from '../../shared/money.js';
 import { sanitizeCustomerOutput } from '../ai/customer-output.js';
+import { AppError } from '../../shared/response.js';
 
 export class OrderService {
   private async getCustomerNotificationLanguage(customerId: number): Promise<string> {
@@ -549,11 +550,24 @@ export class OrderService {
   /**
    * Driver: Reject Delivery Offer & Reassign to Next Available Driver (G-058)
    */
-  async driverReject(orderId: number, driverId?: number, reason: string = 'Driver unavailable / vehicle issue'): Promise<Order> {
+  async driverReject(orderId: number, driverId?: number, reason: string = 'Driver unavailable / vehicle issue', actingDriverId?: number): Promise<Order> {
     const current = await this.getOrderById(orderId);
     if (!current) throw new Error(`Order ${orderId} not found`);
 
     const rejectedDriverId = driverId || current.driver_id || 1;
+    if (actingDriverId && actingDriverId !== rejectedDriverId) {
+      throw new AppError('A driver may reject only their own delivery offer.', 403, 'DRIVER_ACTOR_MISMATCH');
+    }
+    if (actingDriverId) {
+      const offers = await query<any[]>(`
+        SELECT id FROM driver_offers
+         WHERE order_id = ? AND driver_id = ? AND status IN ('OFFERED', 'PENDING')
+         ORDER BY attempt_no DESC LIMIT 1
+      `, [orderId, actingDriverId]);
+      if (!offers[0] && current.driver_id !== actingDriverId) {
+        throw new AppError('This driver has no active offer for the order.', 403, 'DRIVER_OFFER_NOT_OWNED');
+      }
+    }
 
     // Record offer rejection in driver_offers table
     await execute(`
@@ -681,30 +695,67 @@ export class OrderService {
   /**
    * Driver: Accept Delivery Offer (G-034 State Validated)
    */
-  async driverAccept(orderId: number, driverId?: number): Promise<Order> {
-    const current = await this.getOrderById(orderId);
-    if (!current) throw new Error(`Order ${orderId} not found`);
+  async driverAccept(orderId: number, driverId?: number, actingDriverId?: number): Promise<Order> {
+    const connection = await pool.getConnection();
+    let committed = false;
+    try {
+      await connection.beginTransaction();
+      const [orderRows] = await connection.execute<any[]>(`SELECT * FROM orders WHERE id = ? FOR UPDATE`, [orderId]);
+      const current = orderRows[0];
+      if (!current) throw new Error(`Order ${orderId} not found`);
+      if (!['PREPARING', 'WAITING_FOR_DRIVER', 'READY_FOR_PICKUP'].includes(current.status)) {
+        throw new Error(`Invalid status transition: Cannot accept delivery for order in status "${current.status}"`);
+      }
 
-    if (!['PREPARING', 'WAITING_FOR_DRIVER', 'READY_FOR_PICKUP'].includes(current.status)) {
-      throw new Error(`Invalid status transition: Cannot accept delivery for order in status "${current.status}"`);
+      let targetDriverId = driverId;
+      if (!targetDriverId) {
+        const [availableDrivers] = await connection.execute<any[]>(`
+          SELECT id FROM drivers
+           WHERE status = 'ACTIVE' AND availability_status IN ('AVAILABLE', 'ONLINE')
+           ORDER BY id ASC LIMIT 1 FOR UPDATE
+        `);
+        targetDriverId = availableDrivers[0]?.id;
+      }
+      if (!targetDriverId) throw new Error('No available driver can accept this order');
+      if (actingDriverId && targetDriverId !== actingDriverId) {
+        throw new AppError('A driver may accept only their own delivery offer.', 403, 'DRIVER_ACTOR_MISMATCH');
+      }
+
+      const [driverRows] = await connection.execute<any[]>(`SELECT id, status, availability_status FROM drivers WHERE id = ? FOR UPDATE`, [targetDriverId]);
+      if (!driverRows[0] || driverRows[0].status !== 'ACTIVE' || !['AVAILABLE', 'ONLINE'].includes(driverRows[0].availability_status)) {
+        throw new Error('The selected driver is not available');
+      }
+      if (actingDriverId) {
+        const [offerRows] = await connection.execute<any[]>(`
+          SELECT id FROM driver_offers
+           WHERE order_id = ? AND driver_id = ? AND status IN ('OFFERED', 'PENDING')
+           ORDER BY attempt_no DESC LIMIT 1 FOR UPDATE
+        `, [orderId, targetDriverId]);
+        if (!offerRows[0] && current.driver_id !== targetDriverId) {
+          throw new AppError('This driver has no active offer for the order.', 403, 'DRIVER_OFFER_NOT_OWNED');
+        }
+      }
+
+      await connection.execute(`
+        UPDATE orders SET driver_id = ?, status = 'DRIVER_ASSIGNED', driver_assigned_at = NOW() WHERE id = ?
+      `, [targetDriverId, orderId]);
+      await connection.execute(`
+        UPDATE drivers SET availability_status = 'BUSY', current_order_count = current_order_count + 1 WHERE id = ?
+      `, [targetDriverId]);
+      await connection.execute(`
+        UPDATE driver_offers SET status = 'ACCEPTED', responded_at = NOW()
+         WHERE order_id = ? AND driver_id = ? AND status IN ('OFFERED', 'PENDING')
+      `, [orderId, targetDriverId]);
+      await connection.execute(`
+        INSERT INTO order_status_history (order_id, previous_status, new_status, actor_type, note)
+        VALUES (?, ?, 'DRIVER_ASSIGNED', 'DRIVER', 'Driver accepted delivery assignment')
+      `, [orderId, current.status]);
+      await connection.commit();
+      committed = true;
+    } finally {
+      if (!committed) await connection.rollback();
+      connection.release();
     }
-
-    const targetDriverId = driverId || (await this.getAssignedOrFirstDriver(orderId));
-
-    await execute(`
-      UPDATE orders 
-      SET driver_id = ?, status = 'DRIVER_ASSIGNED', driver_assigned_at = NOW()
-      WHERE id = ?
-    `, [targetDriverId, orderId]);
-
-    await execute(`
-      UPDATE drivers SET availability_status = 'BUSY', current_order_count = current_order_count + 1 WHERE id = ?
-    `, [targetDriverId]);
-
-    await execute(`
-      INSERT INTO order_status_history (order_id, previous_status, new_status, actor_type, note)
-      VALUES (?, ?, 'DRIVER_ASSIGNED', 'DRIVER', 'Driver accepted delivery assignment')
-    `, [orderId, current.status]);
 
     const updated = (await this.getOrderById(orderId))!;
     broadcastEvent('ORDER_UPDATED', updated);
@@ -718,9 +769,12 @@ export class OrderService {
   /**
    * Driver: Picked Up (G-034 State Validated)
    */
-  async driverPickup(orderId: number): Promise<Order> {
+  async driverPickup(orderId: number, actingDriverId?: number): Promise<Order> {
     const current = await this.getOrderById(orderId);
     if (!current) throw new Error(`Order ${orderId} not found`);
+    if (actingDriverId && current.driver_id !== actingDriverId) {
+      throw new AppError('A driver may pick up only their assigned order.', 403, 'DRIVER_ORDER_NOT_OWNED');
+    }
 
     if (current.status !== 'DRIVER_ASSIGNED') {
       throw new Error(`Invalid status transition: Cannot pick up order in status "${current.status}". Expected "DRIVER_ASSIGNED".`);
@@ -749,9 +803,12 @@ export class OrderService {
   /**
    * Driver: Delivered (G-034 State Validated)
    */
-  async driverDeliver(orderId: number, rating?: number, comment?: string): Promise<Order> {
+  async driverDeliver(orderId: number, rating?: number, comment?: string, actingDriverId?: number): Promise<Order> {
     const current = await this.getOrderById(orderId);
     if (!current) throw new Error(`Order ${orderId} not found`);
+    if (actingDriverId && current.driver_id !== actingDriverId) {
+      throw new AppError('A driver may deliver only their assigned order.', 403, 'DRIVER_ORDER_NOT_OWNED');
+    }
 
     if (current.status !== 'PICKED_UP') {
       throw new Error(`Invalid status transition: Cannot deliver order in status "${current.status}". Expected "PICKED_UP".`);
@@ -784,6 +841,14 @@ export class OrderService {
         ON DUPLICATE KEY UPDATE overall_rating = VALUES(overall_rating), comment = VALUES(comment)
       `, [orderId, current.customer_id, rating, comment || null]);
     }
+
+    // The masked relay remains available briefly for delivery follow-up, then
+    // the expiry worker locks it without exposing either party's phone number.
+    await execute(`
+      UPDATE delivery_channels
+         SET expires_at = COALESCE(expires_at, DATE_ADD(NOW(), INTERVAL 30 MINUTE))
+       WHERE order_id = ? AND status = 'OPEN'
+    `, [orderId]);
 
     const updated = (await this.getOrderById(orderId))!;
     broadcastEvent('ORDER_UPDATED', updated);

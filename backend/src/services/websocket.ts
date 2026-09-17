@@ -1,13 +1,48 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { Server as HttpServer } from 'http';
+import { IncomingMessage, Server as HttpServer } from 'http';
+import { AuthTokenPayload, verifyToken } from '../modules/auth/auth.service.js';
 
 let wss: WebSocketServer | null = null;
-const clients = new Set<WebSocket>();
+type AuthenticatedWebSocket = WebSocket & { authUser?: AuthTokenPayload };
+const clients = new Set<AuthenticatedWebSocket>();
+
+function getWebSocketToken(request: IncomingMessage): string | null {
+  const header = request.headers['sec-websocket-protocol'];
+  const protocols = (Array.isArray(header) ? header.join(',') : header || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (!protocols.includes('lion-auth')) return null;
+  return protocols.find((value) => value !== 'lion-auth') || null;
+}
 
 export function initWebSocketServer(server: HttpServer) {
-  wss = new WebSocketServer({ server, path: '/ws' });
+  wss = new WebSocketServer({
+    server,
+    path: '/ws',
+    // Browser WebSocket APIs cannot set Authorization headers. Keep the JWT
+    // in the WebSocket subprotocol header rather than placing it in a URL.
+    handleProtocols: (protocols) => protocols.has('lion-auth') ? 'lion-auth' : false,
+    verifyClient: (info, done) => {
+      const token = getWebSocketToken(info.req);
+      const user = token ? verifyToken(token) : null;
+      if (!user) {
+        done(false, 401, 'Unauthorized');
+        return;
+      }
+      (info.req as IncomingMessage & { wsUser?: AuthTokenPayload }).wsUser = user;
+      done(true);
+    },
+  });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws: AuthenticatedWebSocket, request) => {
+    const user = (request as IncomingMessage & { wsUser?: AuthTokenPayload }).wsUser;
+    if (!user) {
+      ws.close(1008, 'Unauthorized');
+      return;
+    }
+    ws.authUser = user;
     clients.add(ws);
     // Send initial handshake
     ws.send(JSON.stringify({ type: 'CONNECTED', timestamp: new Date().toISOString() }));

@@ -1323,6 +1323,16 @@ export class AiToolsExecutor {
           };
         }
 
+        if (!summary.merchantName) {
+          return {
+            toolName,
+            success: false,
+            error: 'The cart merchant could not be verified. Please request a fresh cart summary before checkout.',
+            errorCode: 'CART_MERCHANT_CONTEXT_MISSING',
+            stateChanged: false,
+          };
+        }
+
         const order = await orderService.createOrderFromCart(
           customerId,
           state.selectedAddress.id,
@@ -1332,7 +1342,7 @@ export class AiToolsExecutor {
         state.activeOrderSummary = {
           orderId: order.id,
           orderNumber: order.order_number,
-          merchantName: summary.merchantName || 'Lion Merchant',
+          merchantName: summary.merchantName,
           status: order.status,
           totalUsd: order.grand_total,
           createdAt: new Date().toISOString(),

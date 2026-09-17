@@ -1,3 +1,5 @@
+import { getAuthToken } from './api';
+
 type MessageHandler = (event: { type: string; payload: any; data?: any; timestamp?: string }) => void;
 type ReconnectHandler = () => void;
 
@@ -19,9 +21,19 @@ class WebSocketClient {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
     const wsUrl = `${protocol}//${host}/ws`;
+    const token = getAuthToken();
+
+    if (!token) {
+      this.isConnected = false;
+      this.notifyConnectionState(false);
+      this.scheduleReconnect();
+      return;
+    }
 
     try {
-      this.ws = new WebSocket(wsUrl);
+      // The token is sent in Sec-WebSocket-Protocol, not in a URL that could
+      // be retained by browser history or ordinary access logs.
+      this.ws = new WebSocket(wsUrl, ['lion-auth', token]);
 
       this.ws.onopen = () => {
         this.isConnected = true;

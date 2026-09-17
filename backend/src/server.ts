@@ -9,6 +9,7 @@ import { cartService } from './modules/carts/cart.service.js';
 import { whatsappWorker } from './modules/conversations/whatsapp.worker.js';
 import { harvestingWorker } from './modules/ai/dataset/harvesting-worker.js';
 import { whatsappCredentialService } from './modules/whatsapp/whatsapp-credential.service.js';
+import { relayService } from './modules/relay/relay.service.js';
 
 const server = http.createServer(app);
 
@@ -33,6 +34,7 @@ async function startServer() {
   cartService.startAbandonmentScheduler();
   whatsappWorker.start();
   harvestingWorker.start();
+  relayService.startExpiryScheduler();
 
   server.listen(config.port, () => {
     console.log(`🦁 Lion Delivery API Server running at http://localhost:${config.port}`);
